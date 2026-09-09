@@ -1,0 +1,6 @@
+{
+  "name": "djay Pro Sync Engine",
+  "description": "High-precision dual-deck DJ synchronization engine with transient-protected WSOLA audio warp, straight-BPM PCM preparation, monotonic audio-render clock, beat-perfect slave start, continuous PLL phase-lock, and synchronized looper.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
