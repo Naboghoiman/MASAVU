@@ -5,16 +5,15 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { DjMasterController } from './audio/djMasterController';
+import { DjTopNav } from './components/DjTopNav';
 import { WaveformDisplay } from './components/WaveformDisplay';
-import { JogWheel } from './components/JogWheel';
-import { MixerSection } from './components/MixerSection';
-import { DeckControls } from './components/DeckControls';
-import { LooperSection } from './components/LooperSection';
-import { SyncTelemetryPanel } from './components/SyncTelemetryPanel';
+import { LaptopChassis } from './components/LaptopChassis';
+import { DjHardwareController } from './components/DjHardwareController';
 import { TrackLibraryModal } from './components/TrackLibraryModal';
 import { SpecsModal } from './components/SpecsModal';
+import { SyncTelemetryPanel } from './components/SyncTelemetryPanel';
 import { ContinuousPhaseLockState, DeckId, DeckTelemetry, LooperTelemetry, SlaveStartPlan, TrackData } from './types/dj';
-import { Disc3, BookOpen, Volume2, Sparkles, Activity, ShieldCheck, Layers } from 'lucide-react';
+import { Activity, Sparkles, BookOpen } from 'lucide-react';
 
 export default function App() {
   const controllerRef = useRef<DjMasterController | null>(null);
@@ -33,17 +32,30 @@ export default function App() {
 
   // Mixer states
   const [crossfaderPos, setCrossfaderPos] = useState(0);
-  const [crossfaderCurve, setCrossfaderCurve] = useState<'smooth' | 'linear' | 'cut'>('smooth');
+  const [masterVolume, setMasterVolume] = useState(0.9);
 
-  // Modals
+  // Deck A EQ & Levels
+  const [lowEqA, setLowEqA] = useState(0);
+  const [midEqA, setMidEqA] = useState(0);
+  const [highEqA, setHighEqA] = useState(0);
+  const [filterA, setFilterA] = useState(0);
+  const [volumeA, setVolumeA] = useState(0.85);
+
+  // Deck B EQ & Levels
+  const [lowEqB, setLowEqB] = useState(0);
+  const [midEqB, setMidEqB] = useState(0);
+  const [highEqB, setHighEqB] = useState(0);
+  const [filterB, setFilterB] = useState(0);
+  const [volumeB, setVolumeB] = useState(0.85);
+
+  // Navigation & Modals
+  const [activeNavTab, setActiveNavTab] = useState<'songlist' | 'browse' | 'library' | 'performance' | 'settings'>('songlist');
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [libraryTargetDeck, setLibraryTargetDeck] = useState<DeckId>('A');
   const [isSpecsModalOpen, setIsSpecsModalOpen] = useState(false);
+  const [showTelemetryDrawer, setShowTelemetryDrawer] = useState(false);
 
-  // Audio Context startup state
-  const [isAudioInitialized, setIsAudioInitialized] = useState(false);
-
-  // Initialize Audio System once
+  // Initialize Audio System
   useEffect(() => {
     const controller = new DjMasterController();
     controllerRef.current = controller;
@@ -52,10 +64,9 @@ export default function App() {
       setTracks(loadedTracks);
       setTrackA(controller.deckA.getTrack());
       setTrackB(controller.deckB.getTrack());
-      setIsAudioInitialized(true);
     });
 
-    // Auto-resume audio context on first user interaction anywhere
+    // Auto-resume audio context on user interaction
     const unlockAudio = () => {
       if (controller.audioCtx.state === 'suspended') {
         controller.audioCtx.resume();
@@ -65,7 +76,7 @@ export default function App() {
     window.addEventListener('keydown', unlockAudio, { once: true });
     window.addEventListener('touchstart', unlockAudio, { once: true });
 
-    // High frequency telemetry ticker (60 FPS) to update UI states
+    // High frequency telemetry ticker (60 FPS)
     let animId: number;
     const updateTick = () => {
       if (controllerRef.current) {
@@ -89,7 +100,6 @@ export default function App() {
   // Keyboard DJ Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't intercept if user is typing in an input
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
       const c = controllerRef.current;
@@ -98,7 +108,6 @@ export default function App() {
       switch (e.code) {
         case 'Space':
           e.preventDefault();
-          // Toggle play on Deck A
           if (c.deckA.getTelemetry().isPlaying) c.deckA.pause();
           else c.deckA.play();
           break;
@@ -106,11 +115,9 @@ export default function App() {
           c.deckA.handleCuePress();
           break;
         case 'KeyS':
-          // Toggle sync on slave deck
           handleSyncToggle('B');
           break;
         case 'Enter':
-          // Toggle play on Deck B
           if (c.deckB.getTelemetry().isPlaying) c.deckB.pause();
           else c.deckB.play();
           break;
@@ -125,16 +132,6 @@ export default function App() {
           break;
         case 'Digit4':
           c.deckA.triggerHotCue(4);
-          break;
-        case 'KeyL':
-          // Toggle Slot 1 (Uploaded Groove Break Loop) with beat sync
-          c.looper.togglePlaySlot(
-            'loop-groove-break-128',
-            c.deckA.getTelemetry(),
-            c.deckB.getTelemetry(),
-            c.deckA.getTrack(),
-            c.deckB.getTrack()
-          );
           break;
       }
     };
@@ -158,15 +155,15 @@ export default function App() {
     setIsLibraryOpen(true);
   };
 
-  const handleLoadTrack = (deckId: DeckId, track: TrackData) => {
+  const handleLoadTrack = (deckId: DeckId, track: TrackData, targetBpm?: number) => {
     const c = controllerRef.current;
     if (!c) return;
     if (deckId === 'A') {
-      c.deckA.loadTrack(track);
-      setTrackA(track);
+      const prepared = c.deckA.loadTrack(track, targetBpm);
+      setTrackA(prepared);
     } else {
-      c.deckB.loadTrack(track);
-      setTrackB(track);
+      const prepared = c.deckB.loadTrack(track, targetBpm);
+      setTrackB(prepared);
     }
   };
 
@@ -181,57 +178,50 @@ export default function App() {
 
     const masterId = c.getMasterDeckId();
     if (deckId === masterId) {
-      // If clicking sync on master, assign master to the other deck
       const otherDeck: DeckId = deckId === 'A' ? 'B' : 'A';
       c.setMasterDeck(otherDeck);
       c.triggerBeatPerfectSlaveStart('beat');
+      setTrackA(c.deckA.getTrack());
+      setTrackB(c.deckB.getTrack());
     } else {
       const slaveDeck = deckId === 'A' ? c.deckA : c.deckB;
       if (slaveDeck.getTelemetry().isSyncEnabled) {
-        // Toggle sync off
         slaveDeck.setSync(false);
         slaveDeck.setPLLMultiplier(1.0);
       } else {
-        // Trigger Section 5 Beat-Perfect Slave Start
         c.triggerBeatPerfectSlaveStart('beat');
+        setTrackA(c.deckA.getTrack());
+        setTrackB(c.deckB.getTrack());
       }
     }
   };
 
-  const handleMasterToggle = (deckId: DeckId) => {
-    controllerRef.current?.setMasterDeck(deckId);
-  };
-
-  const handleQuickDemoSync = async () => {
+  const handleQuickAutoSync = async () => {
     const c = controllerRef.current;
     if (!c) return;
     if (c.audioCtx.state === 'suspended') {
       await c.audioCtx.resume();
     }
-    // Set crossfader to center
     c.setCrossfaderPosition(0);
     setCrossfaderPos(0);
-    // Assign Deck A as Master
     c.setMasterDeck('A');
 
-    const trackA = c.deckA.getTrack();
-    const trackB = c.deckB.getTrack();
-    if (!trackA || !trackB) return;
+    const tA = c.deckA.getTrack();
+    const tB = c.deckB.getTrack();
+    if (!tA || !tB) return;
 
     if (c.deckA.getTelemetry().isPlaying) {
-      // If Deck A is already running, lock Deck B into beat-sync with Deck A
       c.triggerBeatPerfectSlaveStart('beat');
+      setTrackA(c.deckA.getTrack());
+      setTrackB(c.deckB.getTrack());
     } else {
-      // If both decks are stopped, align both to downbeat 0 and start in 100% sample-lock
       c.deckA.seekToSourceSample(0, false);
       c.deckB.seekToSourceSample(0, false);
-
-      const baseTempo = trackA.bpm / trackB.bpm;
+      const baseTempo = tA.bpm / tB.bpm;
       c.deckB.setBaseTempoMultiplier(baseTempo);
       c.deckB.setPLLMultiplier(1.0);
       c.deckB.setSync(true);
       c.deckA.setSync(false);
-
       const startTime = c.audioCtx.currentTime + 0.08;
       c.deckA.play(startTime, 0);
       c.deckB.play(startTime, 0);
@@ -242,7 +232,7 @@ export default function App() {
   const defaultTelemetryA: DeckTelemetry = {
     deckId: 'A',
     trackId: null,
-    trackTitle: 'LOADING...',
+    trackTitle: 'Midnight Drive',
     bpm: 124,
     effectiveBpm: 124,
     pitchPercentage: 0,
@@ -252,7 +242,7 @@ export default function App() {
     isSyncEnabled: false,
     currentSourceSample: 0,
     currentOutputFrame: 0,
-    currentTimeSeconds: 0,
+    currentTimeSeconds: 206,
     currentBeatIndex: 0,
     beatInBar: 1,
     barIndex: 1,
@@ -263,9 +253,9 @@ export default function App() {
   const defaultTelemetryB: DeckTelemetry = {
     deckId: 'B',
     trackId: null,
-    trackTitle: 'LOADING...',
-    bpm: 128,
-    effectiveBpm: 128,
+    trackTitle: 'Higher Tonight',
+    bpm: 126,
+    effectiveBpm: 126,
     pitchPercentage: 0,
     keyLock: true,
     isPlaying: false,
@@ -273,7 +263,7 @@ export default function App() {
     isSyncEnabled: false,
     currentSourceSample: 0,
     currentOutputFrame: 0,
-    currentTimeSeconds: 0,
+    currentTimeSeconds: 108,
     currentBeatIndex: 0,
     beatInBar: 1,
     barIndex: 1,
@@ -285,282 +275,215 @@ export default function App() {
   const telemB = telemetryB || defaultTelemetryB;
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col antialiased selection:bg-amber-500 selection:text-slate-950 font-sans">
-      {/* Top Professional DJ Header */}
-      <header className="bg-slate-900/90 border-b border-slate-800/80 px-4 py-3 backdrop-blur-md sticky top-0 z-30 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500 via-rose-500 to-indigo-600 flex items-center justify-center text-slate-950 shadow-lg shadow-amber-500/20">
-            <Disc3 className="w-5 h-5 text-white animate-spin" style={{ animationDuration: '8s' }} />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-base font-black tracking-tight text-white font-mono">
-                djay Pro <span className="text-amber-400 font-extrabold">SYNC ENGINE</span>
-              </h1>
-              <span className="bg-slate-800 text-slate-300 border border-slate-700 text-[10px] font-mono px-2 py-0.5 rounded font-bold">
-                V2.2 COMPLIANT
-              </span>
-            </div>
-            <p className="text-[11px] text-slate-400 hidden sm:block">
-              Monotonic Audio-Render Clock • Exact Source-Sample BeatGrid • Continuous Bounded PLL Phase Lock
-            </p>
-          </div>
-        </div>
-
-        {/* Global actions */}
-        <div className="flex items-center gap-2.5">
-          <button
-            id="quick-demo-sync-btn"
-            onClick={handleQuickDemoSync}
-            className="px-3 py-1.5 bg-gradient-to-r from-amber-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 text-slate-950 font-mono font-black rounded-lg text-xs flex items-center gap-1.5 transition-all shadow-md shadow-amber-500/20 active:scale-95"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>AUTO-SYNC DEMO</span>
-          </button>
-
-          <button
-            id="toggle-groove-looper-btn"
-            onClick={() => {
-              const c = controllerRef.current;
-              if (c) {
-                c.looper.togglePlaySlot(
-                  'loop-groove-break-128',
-                  c.deckA.getTelemetry(),
-                  c.deckB.getTelemetry(),
-                  c.deckA.getTrack(),
-                  c.deckB.getTrack()
-                );
-              }
+    <div className="min-h-screen bg-[#06070A] text-slate-100 flex flex-col items-center justify-start antialiased selection:bg-sky-500 selection:text-slate-950 font-sans p-0 sm:p-2">
+      {/* Container simulating the complete setup from the reference image */}
+      <div className="w-full max-w-5xl bg-[#090C12] rounded-none sm:rounded-2xl border-0 sm:border border-[#1E2330] shadow-2xl overflow-hidden flex flex-col">
+        {/* ========================================================================= */}
+        {/* 1. TOP SOFTWARE SCREEN (Laptop Display Section)                            */}
+        {/* ========================================================================= */}
+        <div className="w-full bg-[#07090E] border-b border-[#141824] flex flex-col">
+          {/* Top Bar: Brand, Navigation & Real-time Clock */}
+          <DjTopNav
+            activeTab={activeNavTab}
+            setActiveTab={setActiveNavTab}
+            onOpenSongList={() => {
+              setLibraryTargetDeck('A');
+              setIsLibraryOpen(true);
             }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-mono font-black flex items-center gap-1.5 transition-all shadow-sm active:scale-95 ${
-              looperTelemetry?.slots[0]?.isPlaying
-                ? 'bg-amber-400 text-slate-950 shadow-md shadow-amber-400/30 animate-pulse'
-                : 'bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40'
-            }`}
-            title="Toggle Uploaded Groove Break (Slot 1) in perfect sync"
-          >
-            <Layers className="w-3.5 h-3.5" />
-            <span>{looperTelemetry?.slots[0]?.isPlaying ? 'GROOVE RUNNING' : 'SYNC LOOPER'}</span>
-          </button>
-
-          <button
-            id="open-specs-modal-btn"
-            onClick={() => setIsSpecsModalOpen(true)}
-            className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-amber-300 border border-amber-500/40 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 transition-all shadow-sm"
-          >
-            <BookOpen className="w-4 h-4 text-amber-400" />
-            <span>VIEW V2.2 SPEC</span>
-          </button>
-
-          <div className="hidden lg:flex items-center gap-2 text-xs font-mono bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800 text-slate-400">
-            <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-            <span>CLOCK: {controllerRef.current ? `${(controllerRef.current.audioCtx.sampleRate / 1000).toFixed(1)}kHz` : '44.1kHz'}</span>
-          </div>
-        </div>
-      </header>
-
-      {/* Main DJ Console Workspace */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-4 space-y-4">
-        {/* Section 8: Dual 3-Band Stacked Waveform with Common Visual Reference Line */}
-        <section aria-label="Dual Waveform Stage">
-          <WaveformDisplay
-            trackA={trackA}
-            trackB={trackB}
-            telemetryA={telemA}
-            telemetryB={telemB}
-            phaseLockState={phaseLockState}
-            onSeekDeckA={(s) => controllerRef.current?.deckA.seekToSourceSample(s)}
-            onSeekDeckB={(s) => controllerRef.current?.deckB.seekToSourceSample(s)}
+            onOpenSettings={() => setIsSpecsModalOpen(true)}
           />
-        </section>
 
-        {/* Main Deck Decks & Central Mixer Stage */}
-        <section className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start" aria-label="Deck & Mixer Console">
-          {/* DECK A (Left Side) */}
-          <div className="lg:col-span-4 flex flex-col gap-4">
-            <DeckControls
-              telemetry={telemA}
-              track={trackA}
-              hotCues={controllerRef.current ? controllerRef.current.deckA.getHotCues() : []}
-              loop={controllerRef.current ? controllerRef.current.deckA.getLoop() : { isActive: false, startSourceSample: 0, endSourceSample: 0, lengthBeats: 4 }}
-              accent="blue"
-              onPlay={() => controllerRef.current?.deckA.play()}
-              onPause={() => controllerRef.current?.deckA.pause()}
-              onCueDown={() => controllerRef.current?.deckA.handleCuePress()}
-              onCueUp={() => controllerRef.current?.deckA.handleCueRelease()}
-              onSyncToggle={() => handleSyncToggle('A')}
-              onMasterToggle={() => handleMasterToggle('A')}
-              onPitchChange={(v) => controllerRef.current?.deckA.setPitchPercentage(v)}
-              onKeyLockToggle={() => controllerRef.current?.deckA.toggleKeyLock()}
-              onTriggerHotCue={(id) => controllerRef.current?.deckA.triggerHotCue(id)}
-              onClearHotCue={(id) => controllerRef.current?.deckA.clearHotCue(id)}
-              onSetLoop={(beats) => controllerRef.current?.deckA.setLoop(beats)}
-              onToggleLoop={() => controllerRef.current?.deckA.toggleLoop()}
-              onBeatJump={(beats) => controllerRef.current?.deckA.beatJump(beats)}
-              onOpenLibrary={() => handleOpenLibrary('A')}
-            />
-
-            {/* Deck A Jog Wheel Platter */}
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col items-center justify-center shadow-lg">
-              <JogWheel
-                telemetry={telemA}
-                accentColor="blue"
-                onTouchDown={() => controllerRef.current?.deckA.onJogTouchDown()}
-                onTouchUp={() => controllerRef.current?.deckA.onJogTouchUp()}
-                onScratchMove={(da) => controllerRef.current?.deckA.onJogScratchMove(da)}
-                onNudge={(dir) => controllerRef.current?.deckA.onJogNudge(dir)}
-              />
-            </div>
-          </div>
-
-          {/* CENTER PRO MIXER (Middle) */}
-          <div className="lg:col-span-4">
-            <MixerSection
+          {/* Software Dual Stacked Waveforms: Deck A & Deck B */}
+          <div className="p-2 sm:p-3">
+            <WaveformDisplay
+              trackA={trackA}
+              trackB={trackB}
               telemetryA={telemA}
               telemetryB={telemB}
-              crossfaderPos={crossfaderPos}
-              onCrossfaderChange={(pos) => {
-                setCrossfaderPos(pos);
-                controllerRef.current?.setCrossfaderPosition(pos);
+              phaseLockState={phaseLockState}
+              onSeekDeckA={(s) => controllerRef.current?.deckA.seekToSourceSample(s)}
+              onSeekDeckB={(s) => controllerRef.current?.deckB.seekToSourceSample(s)}
+              onPlayDeckA={() => controllerRef.current?.deckA.play()}
+              onPauseDeckA={() => controllerRef.current?.deckA.pause()}
+              onCueDeckA={() => controllerRef.current?.deckA.handleCuePress()}
+              onPlayDeckB={() => controllerRef.current?.deckB.play()}
+              onPauseDeckB={() => controllerRef.current?.deckB.pause()}
+              onCueDeckB={() => controllerRef.current?.deckB.handleCuePress()}
+              onToggleLooper={(deck) => {
+                const targetDeck = deck === 'A' ? telemA : telemB;
+                const c = controllerRef.current;
+                if (c) {
+                  c.looper.togglePlaySlot(
+                    'loop-groove-break-128',
+                    c.deckA.getTelemetry(),
+                    c.deckB.getTelemetry(),
+                    c.deckA.getTrack(),
+                    c.deckB.getTrack()
+                  );
+                }
               }}
-              crossfaderCurve={crossfaderCurve}
-              onCrossfaderCurveChange={(curve) => {
-                setCrossfaderCurve(curve);
-                controllerRef.current?.setCrossfaderCurve(curve);
+              onToggleHotCue={(deck) => {
+                const c = controllerRef.current;
+                if (deck === 'A') c?.deckA.triggerHotCue(1);
+                else c?.deckB.triggerHotCue(1);
               }}
-              onSetLowEqA={(v) => controllerRef.current?.deckA.setLowEq(v)}
-              onSetMidEqA={(v) => controllerRef.current?.deckA.setMidEq(v)}
-              onSetHighEqA={(v) => controllerRef.current?.deckA.setHighEq(v)}
-              onSetFilterA={(v) => controllerRef.current?.deckA.setFilter(v)}
-              onSetVolumeA={(v) => controllerRef.current?.deckA.setVolume(v)}
-              onSetLowEqB={(v) => controllerRef.current?.deckB.setLowEq(v)}
-              onSetMidEqB={(v) => controllerRef.current?.deckB.setMidEq(v)}
-              onSetHighEqB={(v) => controllerRef.current?.deckB.setHighEq(v)}
-              onSetFilterB={(v) => controllerRef.current?.deckB.setFilter(v)}
-              onSetVolumeB={(v) => controllerRef.current?.deckB.setVolume(v)}
-              onMasterVolumeChange={(v) => controllerRef.current?.setMasterVolume(v)}
-              onPlaySampler={(fx) => controllerRef.current?.playSamplerFx(fx)}
             />
           </div>
+        </div>
 
-          {/* DECK B (Right Side) */}
-          <div className="lg:col-span-4 flex flex-col gap-4">
-            <DeckControls
-              telemetry={telemB}
-              track={trackB}
-              hotCues={controllerRef.current ? controllerRef.current.deckB.getHotCues() : []}
-              loop={controllerRef.current ? controllerRef.current.deckB.getLoop() : { isActive: false, startSourceSample: 0, endSourceSample: 0, lengthBeats: 4 }}
-              accent="emerald"
-              onPlay={() => controllerRef.current?.deckB.play()}
-              onPause={() => controllerRef.current?.deckB.pause()}
-              onCueDown={() => controllerRef.current?.deckB.handleCuePress()}
-              onCueUp={() => controllerRef.current?.deckB.handleCueRelease()}
-              onSyncToggle={() => handleSyncToggle('B')}
-              onMasterToggle={() => handleMasterToggle('B')}
-              onPitchChange={(v) => controllerRef.current?.deckB.setPitchPercentage(v)}
-              onKeyLockToggle={() => controllerRef.current?.deckB.toggleKeyLock()}
-              onTriggerHotCue={(id) => controllerRef.current?.deckB.triggerHotCue(id)}
-              onClearHotCue={(id) => controllerRef.current?.deckB.clearHotCue(id)}
-              onSetLoop={(beats) => controllerRef.current?.deckB.setLoop(beats)}
-              onToggleLoop={() => controllerRef.current?.deckB.toggleLoop()}
-              onBeatJump={(beats) => controllerRef.current?.deckB.beatJump(beats)}
-              onOpenLibrary={() => handleOpenLibrary('B')}
-            />
+        {/* ========================================================================= */}
+        {/* 2. LAPTOP CHASSIS & KEYBOARD SEPARATOR (Between Screen and Controller)   */}
+        {/* ========================================================================= */}
+        <LaptopChassis />
 
-            {/* Deck B Jog Wheel Platter */}
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col items-center justify-center shadow-lg">
-              <JogWheel
-                telemetry={telemB}
-                accentColor="emerald"
-                onTouchDown={() => controllerRef.current?.deckB.onJogTouchDown()}
-                onTouchUp={() => controllerRef.current?.deckB.onJogTouchUp()}
-                onScratchMove={(da) => controllerRef.current?.deckB.onJogScratchMove(da)}
-                onNudge={(dir) => controllerRef.current?.deckB.onJogNudge(dir)}
-              />
-            </div>
-          </div>
-        </section>
+        {/* ========================================================================= */}
+        {/* 3. PHYSICAL HARDWARE CONTROLLER SURFACE (Bottom Half)                    */}
+        {/* ========================================================================= */}
+        <DjHardwareController
+          telemetryA={telemA}
+          telemetryB={telemB}
+          // Transports
+          onPlayA={() => controllerRef.current?.deckA.play()}
+          onPauseA={() => controllerRef.current?.deckA.pause()}
+          onCueDownA={() => controllerRef.current?.deckA.handleCuePress()}
+          onCueUpA={() => controllerRef.current?.deckA.handleCueRelease()}
+          onSyncA={() => handleSyncToggle('A')}
+          onPlayB={() => controllerRef.current?.deckB.play()}
+          onPauseB={() => controllerRef.current?.deckB.pause()}
+          onCueDownB={() => controllerRef.current?.deckB.handleCuePress()}
+          onCueUpB={() => controllerRef.current?.deckB.handleCueRelease()}
+          onSyncB={() => handleSyncToggle('B')}
+          // Deck A EQs & Volume
+          lowEqA={lowEqA}
+          midEqA={midEqA}
+          highEqA={highEqA}
+          filterA={filterA}
+          volumeA={volumeA}
+          onSetLowEqA={(v) => {
+            setLowEqA(v);
+            controllerRef.current?.deckA.setLowEq(v);
+          }}
+          onSetMidEqA={(v) => {
+            setMidEqA(v);
+            controllerRef.current?.deckA.setMidEq(v);
+          }}
+          onSetHighEqA={(v) => {
+            setHighEqA(v);
+            controllerRef.current?.deckA.setHighEq(v);
+          }}
+          onSetFilterA={(v) => {
+            setFilterA(v);
+            controllerRef.current?.deckA.setFilter(v);
+          }}
+          onSetVolumeA={(v) => {
+            setVolumeA(v);
+            controllerRef.current?.deckA.setVolume(v);
+          }}
+          // Deck B EQs & Volume
+          lowEqB={lowEqB}
+          midEqB={midEqB}
+          highEqB={highEqB}
+          filterB={filterB}
+          volumeB={volumeB}
+          onSetLowEqB={(v) => {
+            setLowEqB(v);
+            controllerRef.current?.deckB.setLowEq(v);
+          }}
+          onSetMidEqB={(v) => {
+            setMidEqB(v);
+            controllerRef.current?.deckB.setMidEq(v);
+          }}
+          onSetHighEqB={(v) => {
+            setHighEqB(v);
+            controllerRef.current?.deckB.setHighEq(v);
+          }}
+          onSetFilterB={(v) => {
+            setFilterB(v);
+            controllerRef.current?.deckB.setFilter(v);
+          }}
+          onSetVolumeB={(v) => {
+            setVolumeB(v);
+            controllerRef.current?.deckB.setVolume(v);
+          }}
+          // Master & Crossfader
+          masterVolume={masterVolume}
+          onSetMasterVolume={(v) => {
+            setMasterVolume(v);
+            controllerRef.current?.setMasterVolume(v);
+          }}
+          crossfaderPos={crossfaderPos}
+          onSetCrossfaderPos={(v) => {
+            setCrossfaderPos(v);
+            controllerRef.current?.setCrossfaderPosition(v);
+          }}
+          // Actions & Performance Pads
+          onOpenLibrary={handleOpenLibrary}
+          onTriggerHotCueA={(id) => controllerRef.current?.deckA.triggerHotCue(id)}
+          onTriggerHotCueB={(id) => controllerRef.current?.deckB.triggerHotCue(id)}
+          onSetLoopA={(beats) => controllerRef.current?.deckA.setLoop(beats)}
+          onSetLoopB={(beats) => controllerRef.current?.deckB.setLoop(beats)}
+          onPlaySampler={(fx) => controllerRef.current?.playSamplerFx(fx)}
+        />
+      </div>
 
-        {/* Section 9: Dedicated Pro Hardware Sync Looper (With Uploaded Groove & Slicing) */}
-        <section aria-label="Hardware Sync Looper">
-          <LooperSection
-            telemetry={looperTelemetry}
-            telemetryA={telemA}
-            telemetryB={telemB}
-            trackA={trackA}
-            trackB={trackB}
-            onTogglePlaySlot={(slotId) => {
-              const c = controllerRef.current;
-              if (c) {
-                c.looper.togglePlaySlot(
-                  slotId,
-                  c.deckA.getTelemetry(),
-                  c.deckB.getTelemetry(),
-                  c.deckA.getTrack(),
-                  c.deckB.getTrack()
-                );
-              }
-            }}
-            onSetLoopBeats={(slotId, beats) => controllerRef.current?.looper.setSlotLoopBeats(slotId, beats)}
-            onHalveLoop={(slotId) => controllerRef.current?.looper.halveSlotLoop(slotId)}
-            onDoubleLoop={(slotId) => controllerRef.current?.looper.doubleSlotLoop(slotId)}
-            onTriggerRoll={(slotId, beats) => controllerRef.current?.looper.triggerSlotRoll(slotId, beats)}
-            onReleaseRoll={(slotId) => controllerRef.current?.looper.releaseSlotRoll(slotId)}
-            onSetSlotVolume={(slotId, val) => controllerRef.current?.looper.setSlotVolume(slotId, val)}
-            onSetSlotFilter={(slotId, val) => controllerRef.current?.looper.setSlotFilter(slotId, val)}
-            onToggleSlotMute={(slotId) => controllerRef.current?.looper.toggleSlotMute(slotId)}
-            onToggleSlotSolo={(slotId) => controllerRef.current?.looper.toggleSlotSolo(slotId)}
-            onSetSyncTarget={(target) => controllerRef.current?.looper.setSyncTarget(target)}
-            onSetQuantize={(q) => controllerRef.current?.looper.setQuantize(q)}
-            onSetMasterVolume={(v) => controllerRef.current?.looper.setMasterVolume(v)}
-            onStopAll={() => controllerRef.current?.looper.stopAll()}
-            onPlayAll={() => {
-              const c = controllerRef.current;
-              if (c) {
-                c.looper.playAll(
-                  c.deckA.getTelemetry(),
-                  c.deckB.getTelemetry(),
-                  c.deckA.getTrack(),
-                  c.deckB.getTrack()
-                );
-              }
-            }}
-            onUploadCustomLoop={(slotIndex, file) => {
-              controllerRef.current?.looper.loadCustomAudioIntoSlot(slotIndex, file);
-            }}
-            onCaptureFromDeck={(slotIndex, deckId) => {
-              const c = controllerRef.current;
-              if (!c) return;
-              if (deckId === 'A' && trackA) {
-                c.looper.captureFromDeck(slotIndex, c.deckA.getTelemetry(), trackA);
-              } else if (deckId === 'B' && trackB) {
-                c.looper.captureFromDeck(slotIndex, c.deckB.getTelemetry(), trackB);
-              }
-            }}
-          />
-        </section>
+      {/* Floating Bottom Quick Utilities Bar */}
+      <div className="w-full max-w-5xl flex items-center justify-between py-2 px-3 text-[11px] font-mono text-slate-500">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleQuickAutoSync}
+            className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded text-slate-300 font-bold active:scale-95 transition-all"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+            <span>AUTO-SYNC MASTER DEMO</span>
+          </button>
+          <button
+            onClick={() => setShowTelemetryDrawer(!showTelemetryDrawer)}
+            className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded text-slate-300 font-bold active:scale-95 transition-all"
+          >
+            <Activity className="w-3.5 h-3.5 text-sky-400" />
+            <span>{showTelemetryDrawer ? 'HIDE TELEMETRY' : 'SHOW TELEMETRY'}</span>
+          </button>
+        </div>
 
-        {/* Section 6 & 7 Live Verification & Telemetry Suite */}
-        <section aria-label="Technical Verification Suite">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsSpecsModalOpen(true)}
+            className="hover:text-slate-300 flex items-center gap-1"
+          >
+            <BookOpen className="w-3.5 h-3.5" />
+            <span>SPECIFICATION</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Optional Telemetry Drawer for diagnostics */}
+      {showTelemetryDrawer && (
+        <div className="w-full max-w-5xl mt-2">
           <SyncTelemetryPanel
             telemetryA={telemA}
             telemetryB={telemB}
             phaseLockState={phaseLockState}
             slaveStartPlan={slaveStartPlan}
-            pllConfig={controllerRef.current ? controllerRef.current.syncEngine.getConfig() : { kp: 0.65, ki: 0.12, deadbandSeconds: 0.0015, correctionWindowBeats: 3.0, maxCorrectionFraction: 0.08, severeErrorThresholdSeconds: 0.14 }}
+            pllConfig={
+              controllerRef.current
+                ? controllerRef.current.syncEngine.getConfig()
+                : {
+                    kp: 0.65,
+                    ki: 0.12,
+                    deadbandSeconds: 0.0015,
+                    correctionWindowBeats: 3.0,
+                    maxCorrectionFraction: 0.08,
+                    severeErrorThresholdSeconds: 0.14
+                  }
+            }
             onUpdatePllConfig={(cfg) => controllerRef.current?.syncEngine.updateConfig(cfg)}
             onInjectDisturbance={(ms) => controllerRef.current?.injectPhaseDisturbance(ms)}
             onRetriggerSlaveSync={(mode) => controllerRef.current?.triggerBeatPerfectSlaveStart(mode)}
           />
-        </section>
-      </main>
+        </div>
+      )}
 
-      {/* Footer */}
-      <footer className="border-t border-slate-800/80 bg-slate-900/60 p-3 text-center text-xs text-slate-500 font-mono">
-        djay Pro Synchronization Engine v2.2 • Latency-Compensated Monotonic Output Clock • Space: Play/Pause Deck A • Enter: Play/Pause Deck B • C: Cue • S: Sync
-      </footer>
-
-      {/* Modals */}
+      {/* Track Library Modal */}
       {controllerRef.current && (
         <TrackLibraryModal
           isOpen={isLibraryOpen}
@@ -573,6 +496,7 @@ export default function App() {
         />
       )}
 
+      {/* Specs Modal */}
       <SpecsModal isOpen={isSpecsModalOpen} onClose={() => setIsSpecsModalOpen(false)} />
     </div>
   );

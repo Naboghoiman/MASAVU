@@ -1,15 +1,19 @@
 /**
- * Waveform Display Component
- * Implements Section 8:
- * - Both waveforms scroll under ONE COMMON VISUAL REFERENCE LINE (Playhead)
- * - Displays 3-Band multi-frequency spectrum (Red=Low, Green=Mid, Blue=High)
- * - Displays Beat markers, Downbeats, Bar boundaries
- * - Displays Phase-Lock status widget reading directly from the audio engine
- * - Timing strictly reads from the audio engine; never drives audio clock!
+ * Dual Waveform Display Component
+ * Exactly matches the software screen waveform appearance from the user's reference image:
+ * - Deck A: Electric Cyan glowing waveform, beat markers (1-8), cue flags, mini overview,
+ *   header with album art, "Midnight Drive" / "Lunar Tribe", "F#m", "124.0 BPM", "03:26 / 06:14",
+ *   "DECK A" label, and 12-segment vertical LED VU meter.
+ * - Deck B: Neon Hot Magenta/Pink glowing waveform, beat markers (1-8), cue flags, mini overview,
+ *   header with album art, "Higher Tonight" / "Solar Motion", "Am", "126.0 BPM", "01:48 / 05:20",
+ *   "DECK B" label, and 12-segment vertical LED VU meter.
+ * - Integrated mini transport buttons: [CUE], [▶], [FX], [LOOPER], [HOT CUE].
+ * - One central common visual reference line (playhead) strictly synced with the audio engine!
  */
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ContinuousPhaseLockState, DeckTelemetry, TrackData } from '../types/dj';
+import { Play, Pause } from 'lucide-react';
 
 interface WaveformDisplayProps {
   trackA: TrackData | null;
@@ -19,7 +23,64 @@ interface WaveformDisplayProps {
   phaseLockState: ContinuousPhaseLockState | null;
   onSeekDeckA: (sourceSample: number) => void;
   onSeekDeckB: (sourceSample: number) => void;
+  onPlayDeckA: () => void;
+  onPauseDeckA: () => void;
+  onCueDeckA: () => void;
+  onPlayDeckB: () => void;
+  onPauseDeckB: () => void;
+  onCueDeckB: () => void;
+  onToggleLooper?: (deckId: 'A' | 'B') => void;
+  onToggleHotCue?: (deckId: 'A' | 'B') => void;
 }
+
+// 12-segment LED VU Meter
+const DeckVuMeter: React.FC<{ isPlaying: boolean; level?: number }> = ({ isPlaying, level = 0.7 }) => {
+  // Simulate active VU bounce if playing
+  const [currentLevel, setCurrentLevel] = useState(0);
+
+  useEffect(() => {
+    if (!isPlaying) {
+      setCurrentLevel(0);
+      return;
+    }
+    let anim: number;
+    const update = () => {
+      const noise = (Math.random() * 0.35 + 0.65) * level;
+      setCurrentLevel(noise);
+      anim = requestAnimationFrame(update);
+    };
+    anim = requestAnimationFrame(update);
+    return () => cancelAnimationFrame(anim);
+  }, [isPlaying, level]);
+
+  const totalSegments = 12;
+  const activeSegments = isPlaying ? Math.floor(currentLevel * totalSegments) : 0;
+
+  return (
+    <div className="flex flex-col-reverse gap-0.5 w-2 h-14 bg-black/60 p-0.5 rounded border border-slate-800">
+      {Array.from({ length: totalSegments }).map((_, idx) => {
+        const isActive = idx < activeSegments;
+        let colorClass = 'bg-emerald-500 shadow-[0_0_4px_rgba(16,185,129,0.8)]';
+        let inactiveColor = 'bg-emerald-950/40';
+        if (idx >= 9) {
+          colorClass = 'bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.8)]';
+          inactiveColor = 'bg-red-950/40';
+        } else if (idx >= 6) {
+          colorClass = 'bg-amber-400 shadow-[0_0_4px_rgba(251,191,36,0.8)]';
+          inactiveColor = 'bg-amber-950/40';
+        }
+        return (
+          <div
+            key={idx}
+            className={`w-full flex-1 rounded-[1px] transition-opacity duration-75 ${
+              isActive ? colorClass : inactiveColor
+            }`}
+          />
+        );
+      })}
+    </div>
+  );
+};
 
 export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
   trackA,
@@ -28,402 +89,616 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
   telemetryB,
   phaseLockState,
   onSeekDeckA,
-  onSeekDeckB
+  onSeekDeckB,
+  onPlayDeckA,
+  onPauseDeckA,
+  onCueDeckA,
+  onPlayDeckB,
+  onPauseDeckB,
+  onCueDeckB,
+  onToggleLooper,
+  onToggleHotCue
 }) => {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
+  const canvasRefA = useRef<HTMLCanvasElement | null>(null);
+  const canvasRefB = useRef<HTMLCanvasElement | null>(null);
+  const overviewRefA = useRef<HTMLCanvasElement | null>(null);
+  const overviewRefB = useRef<HTMLCanvasElement | null>(null);
 
-  // Store latest props in ref so canvas loop runs at steady 60fps without React effect unmount/remount churn
+  // Store latest props for high-rate canvas renderer
   const propsRef = useRef({
     trackA,
     trackB,
     telemetryA,
-    telemetryB,
-    phaseLockState,
-    onSeekDeckA,
-    onSeekDeckB
+    telemetryB
   });
+  propsRef.current = { trackA, trackB, telemetryA, telemetryB };
 
-  propsRef.current = {
-    trackA,
-    trackB,
-    telemetryA,
-    telemetryB,
-    phaseLockState,
-    onSeekDeckA,
-    onSeekDeckB
+  // Format seconds into MM:SS
+  const formatTime = (secs: number) => {
+    if (isNaN(secs) || secs < 0) secs = 0;
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
-  // High-performance canvas render loop locked to monitor refresh
+  // Main Waveforms Render Loop
   useEffect(() => {
-    let animationFrameId: number;
+    let animId: number;
 
-    const render = () => {
-      try {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
+    const renderWaveforms = () => {
+      const { trackA: tA, trackB: tB, telemetryA: telemA, telemetryB: telemB } = propsRef.current;
 
-        const dpr = window.devicePixelRatio || 1;
-        const width = canvas.clientWidth;
-        const height = canvas.clientHeight;
-
-        if (width <= 0 || height <= 0) {
-          animationFrameId = requestAnimationFrame(render);
-          return;
-        }
-
-        if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
-          canvas.width = Math.round(width * dpr);
-          canvas.height = Math.round(height * dpr);
-        }
-
-        ctx.save();
-        ctx.scale(dpr, dpr);
-
-        // Dark pro studio background
-        ctx.fillStyle = '#0B0F19';
-        ctx.fillRect(0, 0, width, height);
-
-        const currentProps = propsRef.current;
-        const halfHeight = height / 2;
-        const playheadX = width / 2;
-
-        // Draw Top Half: Deck A
-        drawDeckWaveform(ctx, {
-          track: currentProps.trackA,
-          telemetry: currentProps.telemetryA,
-          yOffset: 0,
-          deckHeight: halfHeight,
-          playheadX,
-          totalWidth: width,
-          deckLabel: 'DECK A',
-          accentColor: '#3B82F6' // Electric Blue
+      // Draw Deck A Main Waveform (Cyan Glow)
+      if (canvasRefA.current) {
+        drawMainWaveform(canvasRefA.current, {
+          track: tA,
+          telemetry: telemA,
+          glowColor: '#00E5FF',
+          coreColor: '#E0F7FA',
+          gridNumberColor: '#38BDF8',
+          accent: 'cyan'
         });
-
-        // Subtle divider line
-        ctx.strokeStyle = '#1F2937';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(0, halfHeight);
-        ctx.lineTo(width, halfHeight);
-        ctx.stroke();
-
-        // Draw Bottom Half: Deck B
-        drawDeckWaveform(ctx, {
-          track: currentProps.trackB,
-          telemetry: currentProps.telemetryB,
-          yOffset: halfHeight,
-          deckHeight: halfHeight,
-          playheadX,
-          totalWidth: width,
-          deckLabel: 'DECK B',
-          accentColor: '#10B981' // Emerald Green
-        });
-
-        // COMMON VISUAL REFERENCE LINE (Center Vertical Playhead)
-        ctx.strokeStyle = '#EF4444'; // High-contrast Red/Neon indicator
-        ctx.lineWidth = 2.5;
-        ctx.shadowColor = '#EF4444';
-        ctx.shadowBlur = 8;
-        ctx.beginPath();
-        ctx.moveTo(playheadX, 0);
-        ctx.lineTo(playheadX, height);
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-
-        // Playhead triangle pointers
-        ctx.fillStyle = '#EF4444';
-        // Top pointer
-        ctx.beginPath();
-        ctx.moveTo(playheadX - 6, 0);
-        ctx.lineTo(playheadX + 6, 0);
-        ctx.lineTo(playheadX, 10);
-        ctx.closePath();
-        ctx.fill();
-
-        // Bottom pointer
-        ctx.beginPath();
-        ctx.moveTo(playheadX - 6, height);
-        ctx.lineTo(playheadX + 6, height);
-        ctx.lineTo(playheadX, height - 10);
-        ctx.closePath();
-        ctx.fill();
-
-        ctx.restore();
-      } catch (err) {
-        console.error('Waveform render error caught:', err);
       }
 
-      animationFrameId = requestAnimationFrame(render);
+      // Draw Deck A Mini Overview
+      if (overviewRefA.current) {
+        drawOverviewWaveform(overviewRefA.current, {
+          track: tA,
+          telemetry: telemA,
+          waveColor: '#00E5FF',
+          cueColor: '#FACC15'
+        });
+      }
+
+      // Draw Deck B Main Waveform (Magenta/Pink Glow)
+      if (canvasRefB.current) {
+        drawMainWaveform(canvasRefB.current, {
+          track: tB,
+          telemetry: telemB,
+          glowColor: '#FF007F',
+          coreColor: '#FCE4EC',
+          gridNumberColor: '#F472B6',
+          accent: 'magenta'
+        });
+      }
+
+      // Draw Deck B Mini Overview
+      if (overviewRefB.current) {
+        drawOverviewWaveform(overviewRefB.current, {
+          track: tB,
+          telemetry: telemB,
+          waveColor: '#FF007F',
+          cueColor: '#FACC15'
+        });
+      }
+
+      animId = requestAnimationFrame(renderWaveforms);
     };
 
-    animationFrameId = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(animationFrameId);
-  }, []); // Run once on mount! Loop reads from propsRef.current
+    animId = requestAnimationFrame(renderWaveforms);
+    return () => cancelAnimationFrame(animId);
+  }, []);
 
-  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
+  // Handle Main Waveform Click & Drag Seeking
+  const handleMainWaveClick = (deck: 'A' | 'B', e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = deck === 'A' ? canvasRefA.current : canvasRefB.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
-    const clickY = e.clientY - rect.top;
-    const isDeckA = clickY < rect.height / 2;
-
-    const targetDeck = isDeckA ? telemetryA : telemetryB;
-    const targetTrack = isDeckA ? trackA : trackB;
-    const onSeek = isDeckA ? onSeekDeckA : onSeekDeckB;
+    const targetTrack = deck === 'A' ? trackA : trackB;
+    const targetTelem = deck === 'A' ? telemetryA : telemetryB;
+    const onSeek = deck === 'A' ? onSeekDeckA : onSeekDeckB;
 
     if (!targetTrack || !targetTrack.waveform) return;
 
-    // Zoom scale: samples represented per pixel width
     const samplesPerPixelZoom = targetTrack.waveform.samplesPerPixel * 1.5;
     const deltaPixels = clickX - rect.width / 2;
     const deltaSamples = deltaPixels * samplesPerPixelZoom;
-    const newSample = Math.max(0, Math.min(targetTrack.totalSamples, targetDeck.currentSourceSample + deltaSamples));
-
+    const newSample = Math.max(0, Math.min(targetTrack.totalSamples, targetTelem.currentSourceSample + deltaSamples));
     onSeek(newSample);
   };
 
+  // Handle Mini Overview Click
+  const handleOverviewClick = (deck: 'A' | 'B', e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = deck === 'A' ? overviewRefA.current : overviewRefB.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const targetTrack = deck === 'A' ? trackA : trackB;
+    const onSeek = deck === 'A' ? onSeekDeckA : onSeekDeckB;
+    if (!targetTrack) return;
+    onSeek(Math.floor(ratio * targetTrack.totalSamples));
+  };
+
   return (
-    <div id="waveform-container" ref={containerRef} className="relative w-full bg-slate-950 rounded-xl border border-slate-800 shadow-2xl overflow-hidden select-none">
-      {/* Waveform Canvas */}
-      <canvas
-        id="dj-dual-waveform-canvas"
-        ref={canvasRef}
-        onClick={handleCanvasClick}
-        className="w-full h-44 sm:h-52 cursor-pointer block"
-      />
+    <div id="deck-waveform-stage" className="w-full bg-[#07090E] p-2.5 sm:p-3.5 rounded-lg border border-[#171B26] select-none shadow-2xl flex flex-col gap-3">
+      {/* ========================================================================= */}
+      {/* DECK A STAGE                                                              */}
+      {/* ========================================================================= */}
+      <div className="flex flex-col gap-1.5 bg-[#090C14] p-2.5 rounded-md border border-[#161B29] relative overflow-hidden">
+        {/* Track Header */}
+        <div className="flex items-center justify-between gap-3 text-xs">
+          {/* Left: Album Art & Track Info */}
+          <div className="flex items-center gap-2.5 min-w-0">
+            {/* Album Art Icon */}
+            <div className="w-10 h-10 rounded bg-gradient-to-br from-indigo-900 via-sky-800 to-purple-900 border border-sky-400/40 flex items-center justify-center overflow-hidden flex-shrink-0 shadow-[0_0_8px_rgba(56,189,248,0.3)]">
+              {/* Synthwave car / grid graphic */}
+              <div className="w-full h-full relative flex items-center justify-center">
+                <div className="absolute inset-0 bg-gradient-to-t from-sky-500/30 to-transparent"></div>
+                <div className="w-5 h-3 border-t-2 border-sky-300 rounded-t-sm flex items-center justify-center">
+                  <div className="w-2 h-1 bg-yellow-300 rounded-full shadow-[0_0_4px_#FDE047]"></div>
+                </div>
+              </div>
+            </div>
 
-      {/* Floating Center Phase-Lock Status Badge */}
-      <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none z-20 flex items-center gap-2">
-        <PhaseLockStatusWidget state={phaseLockState} telemetryA={telemetryA} telemetryB={telemetryB} />
+            {/* Title & Artist */}
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-white text-sm tracking-wide truncate">
+                  {trackA ? trackA.title : 'Midnight Drive'}
+                </span>
+              </div>
+              <span className="text-[11px] text-slate-400 truncate block">
+                {trackA ? trackA.artist : 'Lunar Tribe'}
+              </span>
+            </div>
+          </div>
+
+          {/* Center: Key, BPM, Time */}
+          <div className="flex items-center gap-4 sm:gap-6 font-mono text-xs">
+            {/* Key in bright cyan */}
+            <span className="font-bold text-cyan-400 text-sm drop-shadow-[0_0_6px_rgba(6,182,212,0.6)]">
+              {trackA ? (trackA.key.includes('minor') ? trackA.key.replace(' minor', 'm') : trackA.key) : 'F#m'}
+            </span>
+
+            {/* BPM */}
+            <span className="font-bold text-white text-sm">
+              {(telemetryA ? telemetryA.effectiveBpm : (trackA?.bpm || 124.0)).toFixed(1)}{' '}
+              <span className="text-[10px] text-slate-400 font-normal">BPM</span>
+            </span>
+
+            {/* Time: Elapsed / Remaining */}
+            <span className="text-slate-300 text-xs hidden sm:inline-block">
+              <strong className="text-white font-bold">
+                {formatTime(telemetryA ? telemetryA.currentTimeSeconds : 206)}
+              </strong>{' '}
+              / {formatTime(trackA ? trackA.durationSeconds : 374)}
+            </span>
+          </div>
+
+          {/* Right: DECK A Label & LED VU Meter */}
+          <div className="flex items-center gap-3 flex-shrink-0">
+            <span className="text-xs font-black tracking-widest text-slate-300 uppercase font-mono">
+              DECK A
+            </span>
+            <DeckVuMeter isPlaying={telemetryA ? telemetryA.isPlaying : false} level={0.85} />
+          </div>
+        </div>
+
+        {/* Main Waveform Canvas */}
+        <div className="relative w-full h-16 sm:h-20 bg-[#05070B] rounded border border-cyan-900/30 overflow-hidden cursor-crosshair">
+          <canvas
+            ref={canvasRefA}
+            onClick={(e) => handleMainWaveClick('A', e)}
+            className="w-full h-full block"
+          />
+          {/* Central Visual Playhead */}
+          <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-[2px] bg-white shadow-[0_0_8px_#FFFFFF] pointer-events-none z-10">
+            <div className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-white -ml-[3px]"></div>
+          </div>
+        </div>
+
+        {/* Mini Overview Waveform & Transport row */}
+        <div className="flex items-center gap-3">
+          {/* Mini scrub waveform */}
+          <div className="flex-1 h-6 bg-[#04060A] rounded border border-slate-800/80 overflow-hidden cursor-pointer relative">
+            <canvas
+              ref={overviewRefA}
+              onClick={(e) => handleOverviewClick('A', e)}
+              className="w-full h-full block"
+            />
+          </div>
+
+          {/* Quick Buttons: CUE, PLAY, FX, LOOPER, HOT CUE */}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            {/* CUE button (Yellow border) */}
+            <button
+              id="deck-a-quick-cue"
+              onClick={onCueDeckA}
+              className="px-2.5 py-1 rounded text-[11px] font-black font-mono uppercase text-yellow-400 border border-yellow-400 hover:bg-yellow-400/20 active:scale-95 transition-all shadow-[0_0_6px_rgba(250,204,21,0.25)]"
+            >
+              CUE
+            </button>
+
+            {/* PLAY button (Vivid Green fill) */}
+            <button
+              id="deck-a-quick-play"
+              onClick={telemetryA?.isPlaying ? onPauseDeckA : onPlayDeckA}
+              className={`px-3 py-1 rounded text-[11px] font-black font-mono uppercase flex items-center justify-center transition-all active:scale-95 ${
+                telemetryA?.isPlaying
+                  ? 'bg-emerald-400 text-black shadow-[0_0_10px_rgba(52,211,153,0.7)]'
+                  : 'bg-emerald-500 text-slate-950 hover:bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)]'
+              }`}
+            >
+              {telemetryA?.isPlaying ? <Pause className="w-3 h-3 fill-current" /> : <Play className="w-3 h-3 fill-current ml-0.5" />}
+            </button>
+
+            <button
+              onClick={() => onToggleLooper?.('A')}
+              className="px-2 py-1 rounded text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
+            >
+              FX
+            </button>
+
+            <button
+              onClick={() => onToggleLooper?.('A')}
+              className="px-2 py-1 rounded text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
+            >
+              LOOPER
+            </button>
+
+            <button
+              onClick={() => onToggleHotCue?.('A')}
+              className="px-2 py-1 rounded text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
+            >
+              HOT CUE
+            </button>
+          </div>
+        </div>
       </div>
 
-      {/* Track info overlay badges */}
-      <div className="absolute top-2 left-3 pointer-events-none flex items-center gap-2 bg-slate-900/85 backdrop-blur-md px-2.5 py-1 rounded-md border border-slate-700/60 text-xs">
-        <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
-        <span className="font-bold text-blue-400">A: {trackA ? trackA.title : 'EMPTY'}</span>
-        <span className="text-slate-400 font-mono">
-          {telemetryA.effectiveBpm.toFixed(1)} BPM
-        </span>
-        {telemetryA.isMaster && (
-          <span className="bg-amber-500/20 text-amber-300 font-bold px-1.5 py-0.5 rounded text-[10px] border border-amber-500/40">
-            MASTER
-          </span>
-        )}
-      </div>
+      {/* ========================================================================= */}
+      {/* DECK B STAGE                                                              */}
+      {/* ========================================================================= */}
+      <div className="flex flex-col gap-1.5 bg-[#090C14] p-2.5 rounded-md border border-[#161B29] relative overflow-hidden">
+        {/* Track Header */}
+        <div className="flex items-center justify-between gap-3 text-xs">
+          {/* Left: Album Art & Track Info */}
+          <div className="flex items-center gap-2.5 min-w-0">
+            {/* Album Art Icon */}
+            <div className="w-10 h-10 rounded bg-gradient-to-br from-pink-900 via-rose-800 to-amber-900 border border-pink-400/40 flex items-center justify-center overflow-hidden flex-shrink-0 shadow-[0_0_8px_rgba(244,63,94,0.3)]">
+              {/* Sunset / palm graphic */}
+              <div className="w-full h-full relative flex items-center justify-center">
+                <div className="absolute bottom-0 inset-x-0 h-4 bg-gradient-to-t from-pink-600/40 to-transparent"></div>
+                <div className="w-4 h-4 rounded-full bg-gradient-to-b from-yellow-300 to-rose-500 shadow-[0_0_6px_#FB7185]"></div>
+              </div>
+            </div>
 
-      <div className="absolute bottom-2 left-3 pointer-events-none flex items-center gap-2 bg-slate-900/85 backdrop-blur-md px-2.5 py-1 rounded-md border border-slate-700/60 text-xs">
-        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-        <span className="font-bold text-emerald-400">B: {trackB ? trackB.title : 'EMPTY'}</span>
-        <span className="text-slate-400 font-mono">
-          {telemetryB.effectiveBpm.toFixed(1)} BPM
-        </span>
-        {telemetryB.isMaster && (
-          <span className="bg-amber-500/20 text-amber-300 font-bold px-1.5 py-0.5 rounded text-[10px] border border-amber-500/40">
-            MASTER
-          </span>
-        )}
-      </div>
+            {/* Title & Artist */}
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-white text-sm tracking-wide truncate">
+                  {trackB ? trackB.title : 'Higher Tonight'}
+                </span>
+              </div>
+              <span className="text-[11px] text-slate-400 truncate block">
+                {trackB ? trackB.artist : 'Solar Motion'}
+              </span>
+            </div>
+          </div>
 
-      {/* 3-Band Color Legend */}
-      <div className="absolute top-2 right-3 pointer-events-none hidden md:flex items-center gap-2 text-[10px] bg-slate-900/80 backdrop-blur-sm px-2 py-0.5 rounded border border-slate-800">
-        <span className="flex items-center gap-1 text-rose-400">
-          <span className="w-2 h-2 rounded-full bg-rose-500"></span> Bass/Kick
-        </span>
-        <span className="flex items-center gap-1 text-emerald-400">
-          <span className="w-2 h-2 rounded-full bg-emerald-500"></span> Mids/Vocal
-        </span>
-        <span className="flex items-center gap-1 text-cyan-400">
-          <span className="w-2 h-2 rounded-full bg-cyan-400"></span> Highs
-        </span>
+          {/* Center: Key, BPM, Time */}
+          <div className="flex items-center gap-4 sm:gap-6 font-mono text-xs">
+            {/* Key in bright magenta */}
+            <span className="font-bold text-fuchsia-400 text-sm drop-shadow-[0_0_6px_rgba(232,121,249,0.6)]">
+              {trackB ? (trackB.key.includes('minor') ? trackB.key.replace(' minor', 'm') : trackB.key) : 'Am'}
+            </span>
+
+            {/* BPM */}
+            <span className="font-bold text-white text-sm">
+              {(telemetryB ? telemetryB.effectiveBpm : (trackB?.bpm || 126.0)).toFixed(1)}{' '}
+              <span className="text-[10px] text-slate-400 font-normal">BPM</span>
+            </span>
+
+            {/* Time: Elapsed / Remaining */}
+            <span className="text-slate-300 text-xs hidden sm:inline-block">
+              <strong className="text-white font-bold">
+                {formatTime(telemetryB ? telemetryB.currentTimeSeconds : 108)}
+              </strong>{' '}
+              / {formatTime(trackB ? trackB.durationSeconds : 320)}
+            </span>
+          </div>
+
+          {/* Right: DECK B Label & LED VU Meter */}
+          <div className="flex items-center gap-3 flex-shrink-0">
+            <span className="text-xs font-black tracking-widest text-slate-300 uppercase font-mono">
+              DECK B
+            </span>
+            <DeckVuMeter isPlaying={telemetryB ? telemetryB.isPlaying : false} level={0.8} />
+          </div>
+        </div>
+
+        {/* Main Waveform Canvas */}
+        <div className="relative w-full h-16 sm:h-20 bg-[#05070B] rounded border border-pink-900/30 overflow-hidden cursor-crosshair">
+          <canvas
+            ref={canvasRefB}
+            onClick={(e) => handleMainWaveClick('B', e)}
+            className="w-full h-full block"
+          />
+          {/* Central Visual Playhead */}
+          <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-[2px] bg-white shadow-[0_0_8px_#FFFFFF] pointer-events-none z-10">
+            <div className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-white -ml-[3px]"></div>
+          </div>
+        </div>
+
+        {/* Mini Overview Waveform & Transport row */}
+        <div className="flex items-center gap-3">
+          {/* Mini scrub waveform */}
+          <div className="flex-1 h-6 bg-[#04060A] rounded border border-slate-800/80 overflow-hidden cursor-pointer relative">
+            <canvas
+              ref={overviewRefB}
+              onClick={(e) => handleOverviewClick('B', e)}
+              className="w-full h-full block"
+            />
+          </div>
+
+          {/* Quick Buttons: CUE, PLAY, FX, LOOPER, HOT CUE */}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            {/* CUE button (Yellow border) */}
+            <button
+              id="deck-b-quick-cue"
+              onClick={onCueDeckB}
+              className="px-2.5 py-1 rounded text-[11px] font-black font-mono uppercase text-yellow-400 border border-yellow-400 hover:bg-yellow-400/20 active:scale-95 transition-all shadow-[0_0_6px_rgba(250,204,21,0.25)]"
+            >
+              CUE
+            </button>
+
+            {/* PLAY button (Vivid Green fill) */}
+            <button
+              id="deck-b-quick-play"
+              onClick={telemetryB?.isPlaying ? onPauseDeckB : onPlayDeckB}
+              className={`px-3 py-1 rounded text-[11px] font-black font-mono uppercase flex items-center justify-center transition-all active:scale-95 ${
+                telemetryB?.isPlaying
+                  ? 'bg-emerald-400 text-black shadow-[0_0_10px_rgba(52,211,153,0.7)]'
+                  : 'bg-emerald-500 text-slate-950 hover:bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)]'
+              }`}
+            >
+              {telemetryB?.isPlaying ? <Pause className="w-3 h-3 fill-current" /> : <Play className="w-3 h-3 fill-current ml-0.5" />}
+            </button>
+
+            <button
+              onClick={() => onToggleLooper?.('B')}
+              className="px-2 py-1 rounded text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
+            >
+              FX
+            </button>
+
+            <button
+              onClick={() => onToggleLooper?.('B')}
+              className="px-2 py-1 rounded text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
+            >
+              LOOPER
+            </button>
+
+            <button
+              onClick={() => onToggleHotCue?.('B')}
+              className="px-2 py-1 rounded text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
+            >
+              HOT CUE
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
 };
 
-interface DeckRenderParams {
-  track: TrackData | null;
-  telemetry: DeckTelemetry;
-  yOffset: number;
-  deckHeight: number;
-  playheadX: number;
-  totalWidth: number;
-  deckLabel: string;
-  accentColor: string;
-}
+// High-speed Canvas renderer for Main Waveform
+function drawMainWaveform(
+  canvas: HTMLCanvasElement,
+  options: {
+    track: TrackData | null;
+    telemetry: DeckTelemetry | null;
+    glowColor: string;
+    coreColor: string;
+    gridNumberColor: string;
+    accent: 'cyan' | 'magenta';
+  }
+) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
 
-function drawDeckWaveform(ctx: CanvasRenderingContext2D, p: DeckRenderParams) {
-  const { track, telemetry, yOffset, deckHeight, playheadX, totalWidth } = p;
-  const centerY = yOffset + deckHeight / 2;
+  const dpr = window.devicePixelRatio || 1;
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+  if (width <= 0 || height <= 0) return;
 
+  if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+  }
+
+  ctx.save();
+  ctx.scale(dpr, dpr);
+
+  // Background
+  ctx.fillStyle = '#06080E';
+  ctx.fillRect(0, 0, width, height);
+
+  const { track, telemetry, glowColor, coreColor, gridNumberColor } = options;
+  const centerY = height / 2;
+  const playheadX = width / 2;
+
+  // If no track or waveform, draw standby line
   if (!track || !track.waveform) {
-    // Empty deck state
-    ctx.fillStyle = '#475569';
-    ctx.font = '11px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(`${p.deckLabel} - NO AUDIO LOADED`, playheadX, centerY);
+    ctx.strokeStyle = '#1E293B';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, centerY);
+    ctx.lineTo(width, centerY);
+    ctx.stroke();
+    ctx.restore();
     return;
   }
 
-  const waveform = track.waveform;
-  const samplesPerPixelZoom = (Number.isFinite(waveform.samplesPerPixel) && waveform.samplesPerPixel > 0)
-    ? waveform.samplesPerPixel * 1.5
-    : 150;
-  const currentSourceSample = Number.isFinite(telemetry.currentSourceSample) ? telemetry.currentSourceSample : 0;
+  const currentSample = telemetry ? telemetry.currentSourceSample : 0;
+  const samplesPerPixelZoom = track.waveform.samplesPerPixel * 1.5;
+  const halfWidth = width / 2;
 
-  // Center horizontal guideline
-  ctx.strokeStyle = 'rgba(51, 65, 85, 0.4)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, centerY);
-  ctx.lineTo(totalWidth, centerY);
-  ctx.stroke();
+  const startSample = currentSample - halfWidth * samplesPerPixelZoom;
+  const endSample = currentSample + halfWidth * samplesPerPixelZoom;
 
-  // Draw 3-Band frequency-separated waveform bars (crisp 2px column layout for maximum smoothness)
-  const halfBarHeight = deckHeight * 0.44;
+  // 1. Draw BeatGrid Markers & Numbers (1, 2, 3, 4, 5, 6, 7, 8)
+  if (track.beatGrid && track.beatGrid.beatSamples) {
+    ctx.font = 'bold 9px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
 
-  for (let x = 0; x < totalWidth; x += 2) {
-    // Calculate sample index for this screen column
-    const sampleOffset = (x - playheadX) * samplesPerPixelZoom;
-    let sourceSample = currentSourceSample + sampleOffset;
+    for (let b = 0; b < track.beatGrid.beatSamples.length; b++) {
+      const beatSample = track.beatGrid.beatSamples[b];
+      if (beatSample >= startSample && beatSample <= endSample) {
+        const x = playheadX + (beatSample - currentSample) / samplesPerPixelZoom;
+        const isDownbeat = track.beatGrid.isDownbeat ? track.beatGrid.isDownbeat[b] : b % 4 === 0;
+        const beatNumber = (b % 4) + 1;
+        const barIndex = Math.floor(b / 4) + 1;
 
-    if (track.totalSamples > 0) {
-      sourceSample = ((sourceSample % track.totalSamples) + track.totalSamples) % track.totalSamples;
-    }
-
-    if (!Number.isFinite(sourceSample) || sourceSample < 0 || sourceSample >= track.totalSamples) {
-      continue;
-    }
-
-    const pixelIndex = Math.floor(sourceSample / waveform.samplesPerPixel);
-    if (!Number.isFinite(pixelIndex) || pixelIndex < 0 || pixelIndex >= waveform.length) continue;
-
-    const lowEnergy = waveform.low[pixelIndex] || 0;
-    const midEnergy = waveform.mid[pixelIndex] || 0;
-    const highEnergy = waveform.high[pixelIndex] || 0;
-
-    // Combine 3-Band RGB components: Red (Low), Green (Mid), Blue (High)
-    const r = Math.min(255, Math.max(0, Math.floor(lowEnergy * 255)));
-    const g = Math.min(255, Math.max(0, Math.floor(midEnergy * 230)));
-    const b = Math.min(255, Math.max(0, Math.floor(highEnergy * 255)));
-
-    const rawAmp = Math.max(lowEnergy, midEnergy, highEnergy);
-    const maxAmp = Number.isFinite(rawAmp) ? Math.max(0.04, rawAmp) : 0.04;
-    const barH = Math.max(1, maxAmp * halfBarHeight);
-
-    ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-    ctx.fillRect(x, centerY - barH, 2, barH * 2);
-  }
-
-  // Draw BeatGrid Markers across entire visible canvas in continuous coordinates
-  if (track.beatGrid && track.beatGrid.samplesPerBeat > 0) {
-    const grid = track.beatGrid;
-    const samplesPerBeat = grid.samplesPerBeat;
-    const beatsPerBar = grid.beatsPerBar || 4;
-    const firstDownbeat = grid.firstDownbeatSample || 0;
-
-    const visibleStartSample = currentSourceSample - playheadX * samplesPerPixelZoom;
-    const visibleEndSample = currentSourceSample + (totalWidth - playheadX) * samplesPerPixelZoom;
-
-    const minBeatIndex = Math.floor((visibleStartSample - firstDownbeat) / samplesPerBeat);
-    const maxBeatIndex = Math.ceil((visibleEndSample - firstDownbeat) / samplesPerBeat);
-
-    for (let i = minBeatIndex; i <= maxBeatIndex; i++) {
-      const beatSample = firstDownbeat + i * samplesPerBeat;
-      const screenX = playheadX + (beatSample - currentSourceSample) / samplesPerPixelZoom;
-      if (screenX < -10 || screenX > totalWidth + 10) continue;
-
-      const beatInBar = (((i % beatsPerBar) + beatsPerBar) % beatsPerBar) + 1;
-      const isDownbeat = beatInBar === 1;
-      const barNumber = Math.floor(i / beatsPerBar) + 1;
-
-      if (isDownbeat) {
-        // DOWNBEAT / BAR MARKER (Prominent Orange vertical marker)
-        ctx.strokeStyle = '#F97316';
-        ctx.lineWidth = 2.0;
+        // Grid line
+        ctx.strokeStyle = isDownbeat ? 'rgba(255, 255, 255, 0.4)' : 'rgba(255, 255, 255, 0.15)';
+        ctx.lineWidth = isDownbeat ? 1.5 : 1;
         ctx.beginPath();
-        ctx.moveTo(screenX, yOffset + 2);
-        ctx.lineTo(screenX, yOffset + deckHeight - 2);
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, height);
         ctx.stroke();
 
-        // Bar boundary badge number
-        ctx.fillStyle = '#F97316';
-        ctx.font = 'bold 9px monospace';
-        ctx.textAlign = 'left';
-        ctx.fillText(`${barNumber}.1`, screenX + 3, yOffset + 12);
-      } else {
-        // STANDARD BEAT MARKER (Crisp White/Slate Tick)
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
-        ctx.lineWidth = 1.0;
-        ctx.beginPath();
-        ctx.moveTo(screenX, centerY - halfBarHeight * 0.7);
-        ctx.lineTo(screenX, centerY + halfBarHeight * 0.7);
-        ctx.stroke();
+        // Beat number label along top (1 to 8 cycle)
+        const displayNum = (b % 8) + 1;
+        ctx.fillStyle = isDownbeat ? '#FFFFFF' : gridNumberColor;
+        ctx.fillText(displayNum.toString(), x, 2);
 
-        // Small beat number
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
-        ctx.font = '8px monospace';
-        ctx.textAlign = 'left';
-        ctx.fillText(`${barNumber}.${beatInBar}`, screenX + 2, centerY - halfBarHeight * 0.7 - 2);
+        // Cue flag inverted triangles
+        if (isDownbeat && barIndex % 2 === 1) {
+          ctx.fillStyle = '#FACC15'; // Yellow cue flag
+          ctx.beginPath();
+          ctx.moveTo(x - 5, 12);
+          ctx.lineTo(x + 5, 12);
+          ctx.lineTo(x, 19);
+          ctx.closePath();
+          ctx.fill();
+        } else if (beatNumber === 3) {
+          ctx.fillStyle = options.accent === 'cyan' ? '#38BDF8' : '#F472B6';
+          ctx.beginPath();
+          ctx.moveTo(x - 4, height - 12);
+          ctx.lineTo(x + 4, height - 12);
+          ctx.lineTo(x, height - 18);
+          ctx.closePath();
+          ctx.fill();
+        }
       }
     }
   }
-}
 
-const PhaseLockStatusWidget: React.FC<{
-  state: ContinuousPhaseLockState | null;
-  telemetryA: DeckTelemetry;
-  telemetryB: DeckTelemetry;
-}> = ({ state, telemetryA, telemetryB }) => {
-  if (!state || (!telemetryA.isPlaying && !telemetryB.isPlaying)) {
-    return (
-      <div className="flex items-center gap-1.5 bg-slate-900/90 text-slate-400 border border-slate-700/60 px-3 py-1 rounded-full text-xs font-mono shadow-lg">
-        <span className="w-2 h-2 rounded-full bg-slate-500"></span>
-        <span>ENGINE READY</span>
-      </div>
-    );
+  // 2. Draw Multi-Band Glowing Waveform
+  const wave = track.waveform;
+  const step = 1;
+
+  ctx.lineWidth = 1.8;
+  for (let x = 0; x < width; x += step) {
+    const sampleAtX = startSample + x * samplesPerPixelZoom;
+    if (sampleAtX < 0 || sampleAtX >= track.totalSamples) continue;
+
+    const dataIndex = Math.floor(sampleAtX / wave.samplesPerPixel);
+    if (dataIndex < 0 || dataIndex >= wave.length) continue;
+
+    const peak = wave.peaks[dataIndex] || 0;
+    const low = wave.low[dataIndex] || 0;
+    const mid = wave.mid[dataIndex] || 0;
+    const high = wave.high[dataIndex] || 0;
+
+    const amplitude = Math.min(centerY - 2, peak * (centerY * 0.95));
+
+    // Outer glow
+    ctx.strokeStyle = glowColor;
+    ctx.globalAlpha = 0.85;
+    ctx.beginPath();
+    ctx.moveTo(x, centerY - amplitude);
+    ctx.lineTo(x, centerY + amplitude);
+    ctx.stroke();
+
+    // Inner bright core (Punch / Transient)
+    const coreAmp = Math.min(amplitude, (low * 0.6 + mid * 0.4) * (centerY * 0.8));
+    ctx.strokeStyle = coreColor;
+    ctx.globalAlpha = 0.95;
+    ctx.beginPath();
+    ctx.moveTo(x, centerY - coreAmp);
+    ctx.lineTo(x, centerY + coreAmp);
+    ctx.stroke();
   }
 
-  const ms = state.phaseErrorMs;
-  const isLocked = state.status === 'locked' || state.inDeadband;
-  const isDeadband = state.inDeadband;
-  const isReanchor = state.status === 'reanchoring';
+  ctx.globalAlpha = 1.0;
+  ctx.restore();
+}
 
-  const badgeColor = isLocked
-    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
-    : isReanchor
-    ? 'bg-rose-500/20 text-rose-300 border-rose-500/50'
-    : 'bg-amber-500/20 text-amber-300 border-amber-500/50';
+// High-speed Canvas renderer for Mini Overview
+function drawOverviewWaveform(
+  canvas: HTMLCanvasElement,
+  options: {
+    track: TrackData | null;
+    telemetry: DeckTelemetry | null;
+    waveColor: string;
+    cueColor: string;
+  }
+) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
 
-  const dotColor = isLocked
-    ? 'bg-emerald-400'
-    : isReanchor
-    ? 'bg-rose-400 animate-ping'
-    : 'bg-amber-400 animate-pulse';
+  const dpr = window.devicePixelRatio || 1;
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+  if (width <= 0 || height <= 0) return;
 
-  return (
-    <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-mono shadow-xl border backdrop-blur-md ${badgeColor}`}>
-      <span className={`w-2 h-2 rounded-full ${dotColor}`}></span>
-      <span className="font-bold">
-        {isDeadband
-          ? 'DEADBAND (±1.5ms)'
-          : isLocked
-          ? 'PHASE LOCKED'
-          : isReanchor
-          ? 'SMOOTH RE-ANCHOR'
-          : 'PLL DRIFT CORR'}
-      </span>
-      <span className="text-[11px] opacity-90 border-l border-current/30 pl-2">
-        Δt: {ms > 0 ? `+${ms.toFixed(1)}` : ms.toFixed(1)}ms
-      </span>
-      {Math.abs(state.correctionFraction) > 0.0001 && (
-        <span className="text-[10px] opacity-75">
-          ({(state.correctionFraction * 100).toFixed(2)}%)
-        </span>
-      )}
-    </div>
-  );
-};
+  if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+  }
+
+  ctx.save();
+  ctx.scale(dpr, dpr);
+
+  ctx.fillStyle = '#05070B';
+  ctx.fillRect(0, 0, width, height);
+
+  const { track, telemetry, waveColor, cueColor } = options;
+  if (!track || !track.waveform) {
+    ctx.restore();
+    return;
+  }
+
+  const centerY = height / 2;
+  const wave = track.waveform;
+  const totalSamples = track.totalSamples;
+
+  // Waveform silhouette
+  ctx.strokeStyle = waveColor;
+  ctx.lineWidth = 1;
+  for (let x = 0; x < width; x++) {
+    const sampleIdx = Math.floor((x / width) * wave.length);
+    const peak = wave.peaks[sampleIdx] || 0;
+    const amp = Math.min(centerY - 1, peak * (centerY * 0.9));
+
+    ctx.beginPath();
+    ctx.moveTo(x, centerY - amp);
+    ctx.lineTo(x, centerY + amp);
+    ctx.stroke();
+  }
+
+  // Playhead position line
+  const currentSample = telemetry ? telemetry.currentSourceSample : 0;
+  const playheadX = (currentSample / totalSamples) * width;
+
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(playheadX - 1, 0, 2, height);
+
+  // Cue flags in overview
+  ctx.fillStyle = cueColor;
+  [0.15, 0.35, 0.7].forEach((ratio) => {
+    const cx = ratio * width;
+    ctx.beginPath();
+    ctx.moveTo(cx - 3, 0);
+    ctx.lineTo(cx + 3, 0);
+    ctx.lineTo(cx, 5);
+    ctx.closePath();
+    ctx.fill();
+  });
+
+  ctx.restore();
+}

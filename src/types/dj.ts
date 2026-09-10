@@ -174,8 +174,31 @@ export interface TrackData {
   warpMap?: WarpMap;
   /** Whether the PCM audio has been straightened by the WSOLA pre-sync warp engine */
   isStraightened?: boolean;
+  /** Whether this track is a prepared/normalized track */
+  isPreparedTrack?: boolean;
   /** Original detected BPM before straight-BPM correction */
   originalBpm?: number;
+}
+
+export interface PreparedTrack extends TrackData {
+  /** Explicitly marked as prepared track with corrected PCM & BeatGrid */
+  isPreparedTrack: true;
+  /** Corrected uniform mastered BPM value */
+  bpm: number;
+  /** Corrected duration in seconds */
+  durationSeconds: number;
+  /** Corrected total sample count */
+  totalSamples: number;
+  /** Corrected PCM audio buffer */
+  audioBuffer: AudioBuffer;
+  /** Corrected uniform BeatGrid */
+  beatGrid: BeatGrid;
+  /** Original metadata preserved for reference */
+  originalMetadata?: {
+    bpm: number;
+    durationSeconds: number;
+    totalSamples: number;
+  };
 }
 
 export interface WaveformData {

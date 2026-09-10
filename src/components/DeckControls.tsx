@@ -6,7 +6,7 @@
 
 import React, { useState } from 'react';
 import { DeckTelemetry, HotCue, LoopState, TrackData } from '../types/dj';
-import { Play, Pause, Disc, Lock, Unlock, FastForward, Rewind, Music2 } from 'lucide-react';
+import { Play, Pause, Disc, Lock, Unlock, FastForward, Rewind, Music2, RefreshCw } from 'lucide-react';
 
 interface DeckControlsProps {
   telemetry: DeckTelemetry;
@@ -28,6 +28,8 @@ interface DeckControlsProps {
   onToggleLoop: () => void;
   onBeatJump: (beats: number) => void;
   onOpenLibrary: () => void;
+  onNormalizeBpm?: (targetBpm: number) => void;
+  otherDeckBpm?: number;
 }
 
 export const DeckControls: React.FC<DeckControlsProps> = ({
@@ -49,7 +51,9 @@ export const DeckControls: React.FC<DeckControlsProps> = ({
   onSetLoop,
   onToggleLoop,
   onBeatJump,
-  onOpenLibrary
+  onOpenLibrary,
+  onNormalizeBpm,
+  otherDeckBpm
 }) => {
   const [deleteMode, setDeleteMode] = useState(false);
   const [selectedLoopBeats, setSelectedLoopBeats] = useState(4);
@@ -89,7 +93,16 @@ export const DeckControls: React.FC<DeckControlsProps> = ({
                 SYNC ON
               </span>
             )}
-            {telemetry.isStraightened && (
+            {track?.isPreparedTrack && (
+              <span
+                id={`deck-${telemetry.deckId}-prepared-badge`}
+                className="bg-emerald-500/25 text-emerald-300 border border-emerald-500/50 font-mono font-bold px-1.5 py-0.2 rounded text-[9px] uppercase tracking-wider"
+                title={`Prepared Mastered Track: ${track.bpm.toFixed(1)} BPM, WSOLA time-stretched PCM with kick/snare attack protection & aligned BeatGrid`}
+              >
+                PREPARED {track.bpm.toFixed(1)}
+              </span>
+            )}
+            {telemetry.isStraightened && !track?.isPreparedTrack && (
               <span
                 className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-mono font-bold px-1.5 py-0.2 rounded text-[9px] uppercase tracking-wider"
                 title={`Straight-BPM PCM Active (${telemetry.warpStatus?.kickTransientsProtected || 0} kicks & ${telemetry.warpStatus?.snareTransientsProtected || 0} snares protected)`}
@@ -107,14 +120,29 @@ export const DeckControls: React.FC<DeckControlsProps> = ({
           </p>
         </div>
 
-        <button
-          id={`deck-${telemetry.deckId}-load-btn`}
-          onClick={onOpenLibrary}
-          className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm"
-        >
-          <Music2 className="w-3.5 h-3.5 text-amber-400" />
-          <span>LOAD</span>
-        </button>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {otherDeckBpm && Math.abs(otherDeckBpm - telemetry.effectiveBpm) > 0.05 && onNormalizeBpm && (
+            <button
+              id={`deck-${telemetry.deckId}-normalize-btn`}
+              onClick={() => onNormalizeBpm(otherDeckBpm)}
+              title={`WSOLA Normalize BPM: Re-master PCM to ${otherDeckBpm.toFixed(1)} BPM with stereo coherence, transient kick punch & BeatGrid alignment`}
+              className="px-2 py-1.5 bg-amber-500/15 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded text-xs font-mono font-bold flex items-center gap-1 transition-all"
+            >
+              <RefreshCw className="w-3 h-3" />
+              <span className="hidden sm:inline">NORM TO {otherDeckBpm.toFixed(1)}</span>
+              <span className="sm:hidden">{otherDeckBpm.toFixed(0)}</span>
+            </button>
+          )}
+
+          <button
+            id={`deck-${telemetry.deckId}-load-btn`}
+            onClick={onOpenLibrary}
+            className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm"
+          >
+            <Music2 className="w-3.5 h-3.5 text-amber-400" />
+            <span>LOAD</span>
+          </button>
+        </div>
       </div>
 
       {/* BPM & Monotonic Time Display */}

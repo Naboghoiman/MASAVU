@@ -11,6 +11,7 @@ import {
   DeckTelemetry,
   HotCue,
   LoopState,
+  PreparedTrack,
   TrackData
 } from '../types/dj';
 import { prepareStraightBpmTrack } from './audioWarpEngine';
@@ -20,7 +21,7 @@ export class DjDeck {
   private audioCtx: AudioContext;
 
   // Track data & coordinates
-  private track: TrackData | null = null;
+  private track: PreparedTrack | TrackData | null = null;
   private currentSourceSample = 0;
   private isPlaying = false;
   private isMaster = false;
@@ -155,12 +156,17 @@ export class DjDeck {
   }
 
   /**
-   * Loads a track into the deck, resets playhead to first beat, and initializes mapping
+   * Loads a track into the deck, ensures it is a fully prepared straight-BPM track,
+   * resets playhead to first beat, and initializes mapping.
    */
-  public loadTrack(track: TrackData): void {
+  public loadTrack(track: TrackData, targetBpm?: number): PreparedTrack {
     this.stopPlayback();
-    // Silently ensure track PCM is straight-BPM with protected transients
-    const effectiveTrack = track.isStraightened ? track : prepareStraightBpmTrack(track, track.bpm, this.audioCtx);
+    const chosenBpm = targetBpm && Number.isFinite(targetBpm) && targetBpm > 20 ? targetBpm : track.bpm;
+    // Silently ensure track PCM is straight-BPM PreparedTrack with protected transients
+    const effectiveTrack: PreparedTrack = (track.isPreparedTrack && track.bpm === chosenBpm)
+      ? (track as PreparedTrack)
+      : prepareStraightBpmTrack(track, chosenBpm, this.audioCtx);
+
     this.track = effectiveTrack;
     this.currentSourceSample = effectiveTrack.beatGrid.firstDownbeatSample || 0;
     this.anchorSourceSample = this.currentSourceSample;
@@ -177,9 +183,47 @@ export class DjDeck {
     this.hotCues[0].isActive = true;
 
     this.updateMappingAnchor(this.currentSourceSample);
+    return effectiveTrack;
   }
 
-  public getTrack(): TrackData | null {
+  /**
+   * Pre-Sync BPM Normalization:
+   * Re-masters the track to a new uniform target BPM using WSOLA.
+   * Produces a new PreparedTrack with corrected PCM audio, corrected BPM value,
+   * corrected BeatGrid, and corrected duration.
+   */
+  public prepareToBpm(targetBpm: number): PreparedTrack | null {
+    if (!this.track || !this.track.audioBuffer) return null;
+    const safeBpm = Math.round(targetBpm * 10) / 10;
+    const prevBpm = this.track.bpm;
+    const wasPlaying = this.isPlaying;
+    const currentSample = this.currentSourceSample;
+
+    const ratio = prevBpm > 0 ? safeBpm / prevBpm : 1.0;
+
+    if (wasPlaying) {
+      this.pause();
+    }
+
+    const prepared = prepareStraightBpmTrack(this.track, safeBpm, this.audioCtx);
+    this.track = prepared;
+
+    const mappedSample = Math.round(currentSample / ratio);
+    this.currentSourceSample = Math.max(0, Math.min(prepared.totalSamples - 1, mappedSample));
+    this.anchorSourceSample = this.currentSourceSample;
+    this.anchorTime = this.audioCtx.currentTime;
+    this.baseTempoMultiplier = 1.0;
+    this.pllTempoMultiplier = 1.0;
+    this.updateMappingAnchor(this.currentSourceSample);
+
+    if (wasPlaying) {
+      this.play(this.audioCtx.currentTime + 0.02, this.currentSourceSample);
+    }
+
+    return prepared;
+  }
+
+  public getTrack(): PreparedTrack | TrackData | null {
     return this.track;
   }
 

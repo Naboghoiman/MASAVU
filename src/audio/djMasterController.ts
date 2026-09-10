@@ -4,7 +4,7 @@
  * continuous PLL Phase-Lock loop, and Beat-Perfect Slave synchronization.
  */
 
-import { ContinuousPhaseLockState, DeckId, DeckTelemetry, LooperTelemetry, SlaveStartPlan, TrackData } from '../types/dj';
+import { ContinuousPhaseLockState, DeckId, DeckTelemetry, LooperTelemetry, PreparedTrack, SlaveStartPlan, TrackData } from '../types/dj';
 import { DjDeck } from './djDeck';
 import { DjSyncEngine } from './djSyncEngine';
 import { DjLooper } from './djLooper';
@@ -106,8 +106,19 @@ export class DjMasterController {
     const slaveDeck = this.masterDeckId === 'A' ? this.deckB : this.deckA;
 
     const masterTrack = masterDeck.getTrack();
-    const slaveTrack = slaveDeck.getTrack();
+    let slaveTrack = slaveDeck.getTrack();
     if (!masterTrack || !slaveTrack) return null;
+
+    // PRE-SYNC BPM NORMALIZATION:
+    // If slave track BPM differs from master deck mastered BPM,
+    // prepare the slave track to match master BPM first using WSOLA!
+    // The SYNC engine must only read the prepared BPM, ensuring zero speed mismatch.
+    if (Math.abs(slaveTrack.bpm - masterTrack.bpm) > 0.05) {
+      const prepared = slaveDeck.prepareToBpm(masterTrack.bpm);
+      if (prepared) {
+        slaveTrack = prepared;
+      }
+    }
 
     masterDeck.updateCurrentPosition();
     slaveDeck.updateCurrentPosition();
@@ -249,6 +260,27 @@ export class DjMasterController {
 
   public getLastSlaveStartPlan(): SlaveStartPlan | null {
     return this.lastSlaveStartPlan;
+  }
+
+  /**
+   * Pre-Sync BPM Normalization:
+   * Re-masters a deck's track to a specific target BPM using WSOLA.
+   * Produces a new PreparedTrack with corrected PCM, BPM, BeatGrid, and duration.
+   */
+  public prepareDeckToBpm(deckId: DeckId, targetBpm: number): PreparedTrack | null {
+    const deck = deckId === 'A' ? this.deckA : this.deckB;
+    return deck.prepareToBpm(targetBpm);
+  }
+
+  /**
+   * Normalizes the slave deck's track to match the master deck's BPM before synchronization
+   */
+  public prepareSlaveToMasterBpm(): PreparedTrack | null {
+    const masterDeck = this.masterDeckId === 'A' ? this.deckA : this.deckB;
+    const slaveDeck = this.masterDeckId === 'A' ? this.deckB : this.deckA;
+    const masterTrack = masterDeck.getTrack();
+    if (!masterTrack) return null;
+    return slaveDeck.prepareToBpm(masterTrack.bpm);
   }
 
   /**

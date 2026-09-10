@@ -316,7 +316,8 @@ export function areKeysHarmonicallyCompatible(keyA: string, keyB: string): { com
  */
 export function getPresetDJTracks(audioCtx: AudioContext): TrackData[] {
   return [
-    synthesizeDJTrack(audioCtx, 'Neon Horizon', 'KURA & ALGO', 'Tech House', 124.0, 'A minor', 64),
+    synthesizeDJTrack(audioCtx, 'Midnight Drive', 'Lunar Tribe', 'Synthwave', 124.0, 'F# minor', 64),
+    synthesizeDJTrack(audioCtx, 'Higher Tonight', 'Solar Motion', 'Deep House', 126.0, 'A minor', 64),
     synthesizeDJTrack(audioCtx, 'Cybernetic Pulse', 'CYBER-X', 'Peak Techno', 128.0, 'D minor', 64),
     synthesizeDJTrack(audioCtx, 'Sunset Boulevard', 'RICO LATINO', 'Latin House', 118.0, 'G major', 64),
     synthesizeDJTrack(audioCtx, 'Urban Velocity', 'SUB-STEPPERS', 'Speed Garage', 134.0, 'F minor', 64),
