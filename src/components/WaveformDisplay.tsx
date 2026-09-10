@@ -211,18 +211,17 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
   };
 
   return (
-    <div id="deck-waveform-stage" className="w-full bg-[#07090E] p-2.5 sm:p-3.5 rounded-lg border border-[#171B26] select-none shadow-2xl flex flex-col gap-3">
+    <div id="deck-waveform-stage" className="w-full bg-[#07090E] p-2 sm:p-3 rounded-lg border border-[#171B26] select-none shadow-2xl flex flex-col gap-2">
       {/* ========================================================================= */}
-      {/* DECK A STAGE                                                              */}
+      {/* 1. DECK A HEADER & MINI OVERVIEW STRIP                                    */}
       {/* ========================================================================= */}
-      <div className="flex flex-col gap-1.5 bg-[#090C14] p-2.5 rounded-md border border-[#161B29] relative overflow-hidden">
+      <div className="flex flex-col gap-1.5 bg-[#090C14] p-2 sm:p-2.5 rounded-t-md border border-[#161B29] border-b-0">
         {/* Track Header */}
         <div className="flex items-center justify-between gap-3 text-xs">
           {/* Left: Album Art & Track Info */}
           <div className="flex items-center gap-2.5 min-w-0">
             {/* Album Art Icon */}
-            <div className="w-10 h-10 rounded bg-gradient-to-br from-indigo-900 via-sky-800 to-purple-900 border border-sky-400/40 flex items-center justify-center overflow-hidden flex-shrink-0 shadow-[0_0_8px_rgba(56,189,248,0.3)]">
-              {/* Synthwave car / grid graphic */}
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded bg-gradient-to-br from-indigo-900 via-sky-800 to-purple-900 border border-sky-400/40 flex items-center justify-center overflow-hidden flex-shrink-0 shadow-[0_0_8px_rgba(56,189,248,0.3)]">
               <div className="w-full h-full relative flex items-center justify-center">
                 <div className="absolute inset-0 bg-gradient-to-t from-sky-500/30 to-transparent"></div>
                 <div className="w-5 h-3 border-t-2 border-sky-300 rounded-t-sm flex items-center justify-center">
@@ -245,7 +244,7 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
           </div>
 
           {/* Center: Key, BPM, Time */}
-          <div className="flex items-center gap-4 sm:gap-6 font-mono text-xs">
+          <div className="flex items-center gap-3 sm:gap-6 font-mono text-xs">
             {/* Key in bright cyan */}
             <span className="font-bold text-cyan-400 text-sm drop-shadow-[0_0_6px_rgba(6,182,212,0.6)]">
               {trackA ? (trackA.key.includes('minor') ? trackA.key.replace(' minor', 'm') : trackA.key) : 'F#m'}
@@ -267,31 +266,18 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
           </div>
 
           {/* Right: DECK A Label & LED VU Meter */}
-          <div className="flex items-center gap-3 flex-shrink-0">
-            <span className="text-xs font-black tracking-widest text-slate-300 uppercase font-mono">
+          <div className="flex items-center gap-2.5 flex-shrink-0">
+            <span className="text-xs font-black tracking-widest text-cyan-400 uppercase font-mono">
               DECK A
             </span>
             <DeckVuMeter isPlaying={telemetryA ? telemetryA.isPlaying : false} level={0.85} />
           </div>
         </div>
 
-        {/* Main Waveform Canvas */}
-        <div className="relative w-full h-16 sm:h-20 bg-[#05070B] rounded border border-cyan-900/30 overflow-hidden cursor-crosshair">
-          <canvas
-            ref={canvasRefA}
-            onClick={(e) => handleMainWaveClick('A', e)}
-            className="w-full h-full block"
-          />
-          {/* Central Visual Playhead */}
-          <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-[2px] bg-white shadow-[0_0_8px_#FFFFFF] pointer-events-none z-10">
-            <div className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-white -ml-[3px]"></div>
-          </div>
-        </div>
-
         {/* Mini Overview Waveform & Transport row */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5 pt-0.5">
           {/* Mini scrub waveform */}
-          <div className="flex-1 h-6 bg-[#04060A] rounded border border-slate-800/80 overflow-hidden cursor-pointer relative">
+          <div className="flex-1 h-5 sm:h-6 bg-[#04060A] rounded border border-slate-800/80 overflow-hidden cursor-pointer relative">
             <canvas
               ref={overviewRefA}
               onClick={(e) => handleOverviewClick('A', e)}
@@ -300,12 +286,12 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
           </div>
 
           {/* Quick Buttons: CUE, PLAY, FX, LOOPER, HOT CUE */}
-          <div className="flex items-center gap-1.5 flex-shrink-0">
+          <div className="flex items-center gap-1 sm:gap-1.5 flex-shrink-0">
             {/* CUE button (Yellow border) */}
             <button
               id="deck-a-quick-cue"
               onClick={onCueDeckA}
-              className="px-2.5 py-1 rounded text-[11px] font-black font-mono uppercase text-yellow-400 border border-yellow-400 hover:bg-yellow-400/20 active:scale-95 transition-all shadow-[0_0_6px_rgba(250,204,21,0.25)]"
+              className="px-2 sm:px-2.5 py-0.5 sm:py-1 rounded text-[10px] sm:text-[11px] font-black font-mono uppercase text-yellow-400 border border-yellow-400 hover:bg-yellow-400/20 active:scale-95 transition-all shadow-[0_0_6px_rgba(250,204,21,0.25)]"
             >
               CUE
             </button>
@@ -314,7 +300,7 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
             <button
               id="deck-a-quick-play"
               onClick={telemetryA?.isPlaying ? onPauseDeckA : onPlayDeckA}
-              className={`px-3 py-1 rounded text-[11px] font-black font-mono uppercase flex items-center justify-center transition-all active:scale-95 ${
+              className={`px-2.5 sm:px-3 py-0.5 sm:py-1 rounded text-[10px] sm:text-[11px] font-black font-mono uppercase flex items-center justify-center transition-all active:scale-95 ${
                 telemetryA?.isPlaying
                   ? 'bg-emerald-400 text-black shadow-[0_0_10px_rgba(52,211,153,0.7)]'
                   : 'bg-emerald-500 text-slate-950 hover:bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)]'
@@ -325,21 +311,21 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
 
             <button
               onClick={() => onToggleLooper?.('A')}
-              className="px-2 py-1 rounded text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
+              className="px-1.5 sm:px-2 py-0.5 sm:py-1 rounded text-[9px] sm:text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
             >
               FX
             </button>
 
             <button
               onClick={() => onToggleLooper?.('A')}
-              className="px-2 py-1 rounded text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
+              className="px-1.5 sm:px-2 py-0.5 sm:py-1 rounded text-[9px] sm:text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
             >
               LOOPER
             </button>
 
             <button
               onClick={() => onToggleHotCue?.('A')}
-              className="px-2 py-1 rounded text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
+              className="px-1.5 sm:px-2 py-0.5 sm:py-1 rounded text-[9px] sm:text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
             >
               HOT CUE
             </button>
@@ -348,16 +334,50 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
       </div>
 
       {/* ========================================================================= */}
-      {/* DECK B STAGE                                                              */}
+      {/* 2. DUAL STACKED MAIN WAVEFORMS (CLOSE TO EACH OTHER, ZERO GAP)            */}
       {/* ========================================================================= */}
-      <div className="flex flex-col gap-1.5 bg-[#090C14] p-2.5 rounded-md border border-[#161B29] relative overflow-hidden">
+      <div className="relative w-full bg-[#05070B] border border-[#161B29] overflow-hidden shadow-inner">
+        {/* Deck A Main Waveform (Top) */}
+        <div className="relative w-full h-16 sm:h-20 border-b border-slate-800/80 cursor-crosshair">
+          <canvas
+            ref={canvasRefA}
+            onClick={(e) => handleMainWaveClick('A', e)}
+            className="w-full h-full block"
+          />
+          <div className="absolute top-1.5 left-2 px-1.5 py-0.5 rounded bg-cyan-950/80 border border-cyan-500/40 text-[9px] font-mono font-bold text-cyan-300 pointer-events-none z-10">
+            DECK A
+          </div>
+        </div>
+
+        {/* Deck B Main Waveform (Bottom) - IMMEDIATELY ADJACENT */}
+        <div className="relative w-full h-16 sm:h-20 cursor-crosshair">
+          <canvas
+            ref={canvasRefB}
+            onClick={(e) => handleMainWaveClick('B', e)}
+            className="w-full h-full block"
+          />
+          <div className="absolute bottom-1.5 left-2 px-1.5 py-0.5 rounded bg-pink-950/80 border border-pink-500/40 text-[9px] font-mono font-bold text-pink-300 pointer-events-none z-10">
+            DECK B
+          </div>
+        </div>
+
+        {/* Continuous Shared Central Playhead Line passing through BOTH waveforms */}
+        <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-[2px] bg-white shadow-[0_0_10px_#FFFFFF] pointer-events-none z-20">
+          <div className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-white -ml-[3px]"></div>
+          <div className="absolute bottom-0 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-b-[6px] border-b-white -ml-[3px]"></div>
+        </div>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 3. DECK B HEADER & MINI OVERVIEW STRIP                                    */}
+      {/* ========================================================================= */}
+      <div className="flex flex-col gap-1.5 bg-[#090C14] p-2 sm:p-2.5 rounded-b-md border border-[#161B29] border-t-0">
         {/* Track Header */}
         <div className="flex items-center justify-between gap-3 text-xs">
           {/* Left: Album Art & Track Info */}
           <div className="flex items-center gap-2.5 min-w-0">
             {/* Album Art Icon */}
-            <div className="w-10 h-10 rounded bg-gradient-to-br from-pink-900 via-rose-800 to-amber-900 border border-pink-400/40 flex items-center justify-center overflow-hidden flex-shrink-0 shadow-[0_0_8px_rgba(244,63,94,0.3)]">
-              {/* Sunset / palm graphic */}
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded bg-gradient-to-br from-pink-900 via-rose-800 to-amber-900 border border-pink-400/40 flex items-center justify-center overflow-hidden flex-shrink-0 shadow-[0_0_8px_rgba(244,63,94,0.3)]">
               <div className="w-full h-full relative flex items-center justify-center">
                 <div className="absolute bottom-0 inset-x-0 h-4 bg-gradient-to-t from-pink-600/40 to-transparent"></div>
                 <div className="w-4 h-4 rounded-full bg-gradient-to-b from-yellow-300 to-rose-500 shadow-[0_0_6px_#FB7185]"></div>
@@ -378,7 +398,7 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
           </div>
 
           {/* Center: Key, BPM, Time */}
-          <div className="flex items-center gap-4 sm:gap-6 font-mono text-xs">
+          <div className="flex items-center gap-3 sm:gap-6 font-mono text-xs">
             {/* Key in bright magenta */}
             <span className="font-bold text-fuchsia-400 text-sm drop-shadow-[0_0_6px_rgba(232,121,249,0.6)]">
               {trackB ? (trackB.key.includes('minor') ? trackB.key.replace(' minor', 'm') : trackB.key) : 'Am'}
@@ -400,31 +420,18 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
           </div>
 
           {/* Right: DECK B Label & LED VU Meter */}
-          <div className="flex items-center gap-3 flex-shrink-0">
-            <span className="text-xs font-black tracking-widest text-slate-300 uppercase font-mono">
+          <div className="flex items-center gap-2.5 flex-shrink-0">
+            <span className="text-xs font-black tracking-widest text-fuchsia-400 uppercase font-mono">
               DECK B
             </span>
             <DeckVuMeter isPlaying={telemetryB ? telemetryB.isPlaying : false} level={0.8} />
           </div>
         </div>
 
-        {/* Main Waveform Canvas */}
-        <div className="relative w-full h-16 sm:h-20 bg-[#05070B] rounded border border-pink-900/30 overflow-hidden cursor-crosshair">
-          <canvas
-            ref={canvasRefB}
-            onClick={(e) => handleMainWaveClick('B', e)}
-            className="w-full h-full block"
-          />
-          {/* Central Visual Playhead */}
-          <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-[2px] bg-white shadow-[0_0_8px_#FFFFFF] pointer-events-none z-10">
-            <div className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-white -ml-[3px]"></div>
-          </div>
-        </div>
-
         {/* Mini Overview Waveform & Transport row */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5 pt-0.5">
           {/* Mini scrub waveform */}
-          <div className="flex-1 h-6 bg-[#04060A] rounded border border-slate-800/80 overflow-hidden cursor-pointer relative">
+          <div className="flex-1 h-5 sm:h-6 bg-[#04060A] rounded border border-slate-800/80 overflow-hidden cursor-pointer relative">
             <canvas
               ref={overviewRefB}
               onClick={(e) => handleOverviewClick('B', e)}
@@ -433,12 +440,12 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
           </div>
 
           {/* Quick Buttons: CUE, PLAY, FX, LOOPER, HOT CUE */}
-          <div className="flex items-center gap-1.5 flex-shrink-0">
+          <div className="flex items-center gap-1 sm:gap-1.5 flex-shrink-0">
             {/* CUE button (Yellow border) */}
             <button
               id="deck-b-quick-cue"
               onClick={onCueDeckB}
-              className="px-2.5 py-1 rounded text-[11px] font-black font-mono uppercase text-yellow-400 border border-yellow-400 hover:bg-yellow-400/20 active:scale-95 transition-all shadow-[0_0_6px_rgba(250,204,21,0.25)]"
+              className="px-2 sm:px-2.5 py-0.5 sm:py-1 rounded text-[10px] sm:text-[11px] font-black font-mono uppercase text-yellow-400 border border-yellow-400 hover:bg-yellow-400/20 active:scale-95 transition-all shadow-[0_0_6px_rgba(250,204,21,0.25)]"
             >
               CUE
             </button>
@@ -447,7 +454,7 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
             <button
               id="deck-b-quick-play"
               onClick={telemetryB?.isPlaying ? onPauseDeckB : onPlayDeckB}
-              className={`px-3 py-1 rounded text-[11px] font-black font-mono uppercase flex items-center justify-center transition-all active:scale-95 ${
+              className={`px-2.5 sm:px-3 py-0.5 sm:py-1 rounded text-[10px] sm:text-[11px] font-black font-mono uppercase flex items-center justify-center transition-all active:scale-95 ${
                 telemetryB?.isPlaying
                   ? 'bg-emerald-400 text-black shadow-[0_0_10px_rgba(52,211,153,0.7)]'
                   : 'bg-emerald-500 text-slate-950 hover:bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)]'
@@ -458,21 +465,21 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
 
             <button
               onClick={() => onToggleLooper?.('B')}
-              className="px-2 py-1 rounded text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
+              className="px-1.5 sm:px-2 py-0.5 sm:py-1 rounded text-[9px] sm:text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
             >
               FX
             </button>
 
             <button
               onClick={() => onToggleLooper?.('B')}
-              className="px-2 py-1 rounded text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
+              className="px-1.5 sm:px-2 py-0.5 sm:py-1 rounded text-[9px] sm:text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
             >
               LOOPER
             </button>
 
             <button
               onClick={() => onToggleHotCue?.('B')}
-              className="px-2 py-1 rounded text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
+              className="px-1.5 sm:px-2 py-0.5 sm:py-1 rounded text-[9px] sm:text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
             >
               HOT CUE
             </button>

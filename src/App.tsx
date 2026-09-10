@@ -7,7 +7,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import { DjMasterController } from './audio/djMasterController';
 import { DjTopNav } from './components/DjTopNav';
 import { WaveformDisplay } from './components/WaveformDisplay';
-import { LaptopChassis } from './components/LaptopChassis';
 import { DjHardwareController } from './components/DjHardwareController';
 import { TrackLibraryModal } from './components/TrackLibraryModal';
 import { SpecsModal } from './components/SpecsModal';
@@ -332,12 +331,7 @@ export default function App() {
         </div>
 
         {/* ========================================================================= */}
-        {/* 2. LAPTOP CHASSIS & KEYBOARD SEPARATOR (Between Screen and Controller)   */}
-        {/* ========================================================================= */}
-        <LaptopChassis />
-
-        {/* ========================================================================= */}
-        {/* 3. PHYSICAL HARDWARE CONTROLLER SURFACE (Bottom Half)                    */}
+        {/* 2. PHYSICAL HARDWARE CONTROLLER SURFACE (Mixer & Decks)                   */}
         {/* ========================================================================= */}
         <DjHardwareController
           telemetryA={telemA}
