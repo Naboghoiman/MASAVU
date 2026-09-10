@@ -11,7 +11,20 @@ import { DjHardwareController } from './components/DjHardwareController';
 import { TrackLibraryModal } from './components/TrackLibraryModal';
 import { SpecsModal } from './components/SpecsModal';
 import { SyncTelemetryPanel } from './components/SyncTelemetryPanel';
-import { ContinuousPhaseLockState, DeckId, DeckTelemetry, LooperTelemetry, SlaveStartPlan, TrackData } from './types/dj';
+import { LooperBoard } from './components/LooperBoard';
+import {
+  ContinuousPhaseLockState,
+  DeckId,
+  DeckTelemetry,
+  LooperQuantize,
+  LooperSyncTarget,
+  LooperTelemetry,
+  SamplerPlayMode,
+  SamplerQuantize,
+  SamplerTelemetry,
+  SlaveStartPlan,
+  TrackData
+} from './types/dj';
 import { Activity, Sparkles, BookOpen } from 'lucide-react';
 
 export default function App() {
@@ -28,6 +41,11 @@ export default function App() {
   const [phaseLockState, setPhaseLockState] = useState<ContinuousPhaseLockState | null>(null);
   const [slaveStartPlan, setSlaveStartPlan] = useState<SlaveStartPlan | null>(null);
   const [looperTelemetry, setLooperTelemetry] = useState<LooperTelemetry | null>(null);
+  const [samplerTelemetry, setSamplerTelemetry] = useState<SamplerTelemetry | null>(null);
+
+  // Looper & Sampler Board states
+  const [isLooperBoardOpen, setIsLooperBoardOpen] = useState(true);
+  const [activeBoardMode, setActiveBoardMode] = useState<'looper' | 'sampler'>('looper');
 
   // Mixer states
   const [crossfaderPos, setCrossfaderPos] = useState(0);
@@ -85,6 +103,7 @@ export default function App() {
         setPhaseLockState(c.getPhaseLockState());
         setSlaveStartPlan(c.getLastSlaveStartPlan());
         setLooperTelemetry(c.getLooperTelemetry());
+        setSamplerTelemetry(c.getSamplerTelemetry());
       }
       animId = requestAnimationFrame(updateTick);
     };
@@ -270,6 +289,96 @@ export default function App() {
     vuLevel: [0, 0]
   };
 
+  // =========================================================================
+  // LOOPER & SAMPLER ACTIONS (TEMPO-SYNCED AUDIO LOOPS & PERFORMANCE PADS)
+  // =========================================================================
+  const handleTogglePlaySlot = (slotId: string) => {
+    const c = controllerRef.current;
+    if (!c) return;
+    if (c.audioCtx.state === 'suspended') {
+      c.audioCtx.resume();
+    }
+    c.looper.togglePlaySlot(
+      slotId,
+      c.deckA.getTelemetry(),
+      c.deckB.getTelemetry(),
+      c.deckA.getTrack(),
+      c.deckB.getTrack()
+    );
+    setLooperTelemetry(c.getLooperTelemetry());
+  };
+
+  const handleUploadLoopFile = async (file: File, slotIndex = 0, forcedBars?: number) => {
+    const c = controllerRef.current;
+    if (!c) return;
+    if (c.audioCtx.state === 'suspended') {
+      await c.audioCtx.resume();
+    }
+    await c.looper.loadCustomAudioIntoSlot(slotIndex, file, forcedBars);
+    setLooperTelemetry(c.getLooperTelemetry());
+    setIsLooperBoardOpen(true);
+    setActiveBoardMode('looper');
+  };
+
+  const handleAddCustomLoopSlot = async (file: File) => {
+    const c = controllerRef.current;
+    if (!c) return;
+    if (c.audioCtx.state === 'suspended') {
+      await c.audioCtx.resume();
+    }
+    await c.looper.addCustomLoopSlot(file);
+    setLooperTelemetry(c.getLooperTelemetry());
+    setIsLooperBoardOpen(true);
+    setActiveBoardMode('looper');
+  };
+
+  const handleSetSlotBars = (slotIndex: number, bars: number) => {
+    const c = controllerRef.current;
+    if (!c) return;
+    c.looper.setSlotBars(slotIndex, bars);
+    setLooperTelemetry(c.getLooperTelemetry());
+  };
+
+  const handleCaptureFromDeck = (slotIndex: number, deckId: 'A' | 'B') => {
+    const c = controllerRef.current;
+    if (!c) return;
+    const deck = deckId === 'A' ? c.deckA : c.deckB;
+    const track = deck.getTrack();
+    if (!track) return;
+    c.looper.captureFromDeck(slotIndex, deck.getTelemetry(), track);
+    setLooperTelemetry(c.getLooperTelemetry());
+  };
+
+  const handleUploadSampleFile = async (file: File, padIndex = 0) => {
+    const c = controllerRef.current;
+    if (!c) return;
+    if (c.audioCtx.state === 'suspended') {
+      await c.audioCtx.resume();
+    }
+    await c.sampler.loadCustomSampleIntoPad(padIndex, file);
+    setSamplerTelemetry(c.getSamplerTelemetry());
+    setIsLooperBoardOpen(true);
+    setActiveBoardMode('sampler');
+  };
+
+  const handleTriggerPad = (padIndex: number, velocity = 1.0) => {
+    const c = controllerRef.current;
+    if (!c) return;
+    if (c.audioCtx.state === 'suspended') {
+      c.audioCtx.resume();
+    }
+    const masterDeck = c.deckA.getTelemetry().isMaster ? c.deckA : c.deckB;
+    c.sampler.triggerPad(padIndex, velocity, masterDeck.getTelemetry(), masterDeck.getTrack());
+    setSamplerTelemetry(c.getSamplerTelemetry());
+  };
+
+  const handleReleasePad = (padIndex: number) => {
+    const c = controllerRef.current;
+    if (!c) return;
+    c.sampler.releasePad(padIndex);
+    setSamplerTelemetry(c.getSamplerTelemetry());
+  };
+
   const telemA = telemetryA || defaultTelemetryA;
   const telemB = telemetryB || defaultTelemetryB;
 
@@ -290,6 +399,19 @@ export default function App() {
               setIsLibraryOpen(true);
             }}
             onOpenSettings={() => setIsSpecsModalOpen(true)}
+            isLooperBoardOpen={isLooperBoardOpen}
+            onToggleLooperBoard={(mode) => {
+              if (mode) {
+                setActiveBoardMode(mode);
+                setIsLooperBoardOpen(true);
+              } else {
+                setIsLooperBoardOpen((prev) => !prev);
+              }
+            }}
+            onUploadLoopFile={(file) => handleUploadLoopFile(file, 0)}
+            onUploadSampleFile={(file) => handleUploadSampleFile(file, 0)}
+            isLooperPlaying={looperTelemetry?.isAnyPlaying}
+            isSamplerPlaying={samplerTelemetry?.pads.some((p) => p.isPlaying)}
           />
 
           {/* Software Dual Stacked Waveforms: Deck A & Deck B */}
@@ -328,6 +450,125 @@ export default function App() {
               }}
             />
           </div>
+
+          {/* Dedicated Looper & Sampler Board with Local File Upload Sockets */}
+          <LooperBoard
+            looperTelem={looperTelemetry}
+            samplerTelem={samplerTelemetry}
+            telemetryA={telemA}
+            telemetryB={telemB}
+            trackA={trackA}
+            trackB={trackB}
+            activeBoardMode={activeBoardMode}
+            setActiveBoardMode={setActiveBoardMode}
+            isOpen={isLooperBoardOpen}
+            onClose={() => setIsLooperBoardOpen(false)}
+            // Looper Actions
+            onTogglePlaySlot={handleTogglePlaySlot}
+            onSetLoopBeats={(slotId, beats) => {
+              controllerRef.current?.looper.setSlotLoopBeats(slotId, beats);
+              setLooperTelemetry(controllerRef.current?.getLooperTelemetry() || null);
+            }}
+            onHalveLoop={(slotId) => {
+              controllerRef.current?.looper.halveSlotLoop(slotId);
+              setLooperTelemetry(controllerRef.current?.getLooperTelemetry() || null);
+            }}
+            onDoubleLoop={(slotId) => {
+              controllerRef.current?.looper.doubleSlotLoop(slotId);
+              setLooperTelemetry(controllerRef.current?.getLooperTelemetry() || null);
+            }}
+            onTriggerRoll={(slotId, beats) => {
+              controllerRef.current?.looper.triggerSlotRoll(slotId, beats);
+              setLooperTelemetry(controllerRef.current?.getLooperTelemetry() || null);
+            }}
+            onReleaseRoll={(slotId) => {
+              controllerRef.current?.looper.releaseSlotRoll(slotId);
+              setLooperTelemetry(controllerRef.current?.getLooperTelemetry() || null);
+            }}
+            onSetSlotVolume={(slotId, val) => {
+              controllerRef.current?.looper.setSlotVolume(slotId, val);
+              setLooperTelemetry(controllerRef.current?.getLooperTelemetry() || null);
+            }}
+            onSetSlotFilter={(slotId, val) => {
+              controllerRef.current?.looper.setSlotFilter(slotId, val);
+              setLooperTelemetry(controllerRef.current?.getLooperTelemetry() || null);
+            }}
+            onToggleSlotMute={(slotId) => {
+              controllerRef.current?.looper.toggleSlotMute(slotId);
+              setLooperTelemetry(controllerRef.current?.getLooperTelemetry() || null);
+            }}
+            onToggleSlotSolo={(slotId) => {
+              controllerRef.current?.looper.toggleSlotSolo(slotId);
+              setLooperTelemetry(controllerRef.current?.getLooperTelemetry() || null);
+            }}
+            onSetSyncTarget={(target) => {
+              controllerRef.current?.looper.setSyncTarget(target);
+              setLooperTelemetry(controllerRef.current?.getLooperTelemetry() || null);
+            }}
+            onSetQuantize={(q) => {
+              controllerRef.current?.looper.setQuantize(q);
+              setLooperTelemetry(controllerRef.current?.getLooperTelemetry() || null);
+            }}
+            onSetMasterVolume={(val) => {
+              controllerRef.current?.looper.setMasterVolume(val);
+              setLooperTelemetry(controllerRef.current?.getLooperTelemetry() || null);
+            }}
+            onStopAllLoops={() => {
+              controllerRef.current?.looper.stopAll();
+              setLooperTelemetry(controllerRef.current?.getLooperTelemetry() || null);
+            }}
+            onPlayAllLoops={() => {
+              const c = controllerRef.current;
+              if (c) {
+                c.looper.playAll(telemA, telemB, trackA, trackB);
+                setLooperTelemetry(c.getLooperTelemetry());
+              }
+            }}
+            onUploadCustomLoop={handleUploadLoopFile}
+            onSetSlotBars={handleSetSlotBars}
+            onCaptureFromDeck={handleCaptureFromDeck}
+            onAddCustomLoopSlot={handleAddCustomLoopSlot}
+            // Sampler Actions
+            onTriggerPad={handleTriggerPad}
+            onReleasePad={handleReleasePad}
+            onStopPad={(padIndex) => {
+              controllerRef.current?.sampler.stopPad(padIndex);
+              setSamplerTelemetry(controllerRef.current?.getSamplerTelemetry() || null);
+            }}
+            onStopAllSamples={() => {
+              controllerRef.current?.sampler.stopAll();
+              setSamplerTelemetry(controllerRef.current?.getSamplerTelemetry() || null);
+            }}
+            onSetPadVolume={(padIndex, val) => {
+              controllerRef.current?.sampler.setPadVolume(padIndex, val);
+              setSamplerTelemetry(controllerRef.current?.getSamplerTelemetry() || null);
+            }}
+            onSetPadPitch={(padIndex, semitones) => {
+              controllerRef.current?.sampler.setPadPitch(padIndex, semitones);
+              setSamplerTelemetry(controllerRef.current?.getSamplerTelemetry() || null);
+            }}
+            onSetPadPlayMode={(padIndex, mode) => {
+              controllerRef.current?.sampler.setPadPlayMode(padIndex, mode);
+              setSamplerTelemetry(controllerRef.current?.getSamplerTelemetry() || null);
+            }}
+            onSetPadTempoSync={(padIndex, enabled) => {
+              controllerRef.current?.sampler.setPadTempoSync(padIndex, enabled);
+              setSamplerTelemetry(controllerRef.current?.getSamplerTelemetry() || null);
+            }}
+            onSetPadQuantize={(padIndex, quantize) => {
+              controllerRef.current?.sampler.setPadQuantize(padIndex, quantize);
+              setSamplerTelemetry(controllerRef.current?.getSamplerTelemetry() || null);
+            }}
+            onSetSamplerMasterVolume={(val) => {
+              controllerRef.current?.sampler.setMasterVolume(val);
+              setSamplerTelemetry(controllerRef.current?.getSamplerTelemetry() || null);
+            }}
+            onSetSamplerGlobalQuantize={(q) => {
+              controllerRef.current?.sampler.setGlobalQuantize(q);
+              setSamplerTelemetry(controllerRef.current?.getSamplerTelemetry() || null);
+            }}
+            onUploadCustomSample={handleUploadSampleFile}
+          />
         </div>
 
         {/* ========================================================================= */}

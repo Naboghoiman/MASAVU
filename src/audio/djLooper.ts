@@ -35,6 +35,8 @@ class LoopSlotInstance {
   public isRollActive = false;
   public rollBeats = 1;
   public normalLoopBeats: number;
+  public isUserUploaded = false;
+  public fileName?: string;
 
   // Web Audio Nodes
   public sourceNode: AudioBufferSourceNode | null = null;
@@ -234,7 +236,9 @@ class LoopSlotInstance {
       isPendingQuantize: this.isPendingQuantize,
       isRollActive: this.isRollActive,
       rollBeats: this.rollBeats,
-      vuLevel: this.getVuLevel()
+      vuLevel: this.getVuLevel(),
+      isUserUploaded: this.isUserUploaded,
+      fileName: this.fileName
     };
   }
 }
@@ -571,7 +575,7 @@ export class DjLooper {
   /**
    * Loads a custom audio file into a specific slot
    */
-  public async loadCustomAudioIntoSlot(slotIndex: number, file: File): Promise<void> {
+  public async loadCustomAudioIntoSlot(slotIndex: number, file: File, forcedBars?: number): Promise<void> {
     if (slotIndex < 0 || slotIndex >= this.slots.length) return;
     const arrayBuffer = await file.arrayBuffer();
     const audioBuffer = await this.audioCtx.decodeAudioData(arrayBuffer);
@@ -579,15 +583,95 @@ export class DjLooper {
     const waveform = extractLoopWaveform(audioBuffer, 64);
     const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
 
-    // Estimate BPM from file duration or default to 128
+    // Check if BPM is in name, e.g. "Percussion_124bpm.wav"
+    const bpmMatch = file.name.match(/(?:^|[_\s-])(\d{2,3})(?:\s*bpm|[_\s-]|$)/i);
+    const filenameBpm = bpmMatch ? parseInt(bpmMatch[1], 10) : null;
+
     const duration = audioBuffer.duration;
-    // Guess bars (1, 2, 4, 8)
+    let beats: number;
+    let estimatedBpm: number;
+
+    if (forcedBars) {
+      beats = Math.max(1, forcedBars * 4);
+      estimatedBpm = Math.round((beats / duration) * 60);
+    } else if (filenameBpm && filenameBpm >= 60 && filenameBpm <= 200) {
+      estimatedBpm = filenameBpm;
+      const calculatedBeats = Math.round(duration * (filenameBpm / 60));
+      // Round to nearest musical power of 2 or multiple of 4
+      beats = Math.max(1, Math.min(64, calculatedBeats));
+    } else {
+      // Guess bars (1 bar = 4 beats, 2 bars = 8 beats, 4 bars = 16 beats, 8 bars = 32 beats)
+      const approxBeats = Math.round(duration * (128 / 60));
+      // Snap to nearest 2, 4, 8, 16, 32
+      const candidateBeats = [2, 4, 8, 16, 32];
+      let bestBeats = 16;
+      let minDiff = Infinity;
+      for (const b of candidateBeats) {
+        const diff = Math.abs(approxBeats - b);
+        if (diff < minDiff) {
+          minDiff = diff;
+          bestBeats = b;
+        }
+      }
+      beats = bestBeats;
+      estimatedBpm = Math.round((beats / duration) * 60);
+      if (estimatedBpm < 60 || estimatedBpm > 200) {
+        estimatedBpm = 128;
+      }
+    }
+
+    const newSlot = new LoopSlotInstance(this.audioCtx, this.masterLooperGain, {
+      id: `custom-slot-${slotIndex}-${Date.now()}`,
+      name: cleanName,
+      category: 'custom',
+      bpm: estimatedBpm,
+      totalBeats: beats,
+      audioBuffer,
+      waveform
+    });
+
+    newSlot.isUserUploaded = true;
+    newSlot.fileName = file.name;
+
+    this.slots[slotIndex].stop();
+    this.slots[slotIndex] = newSlot;
+  }
+
+  /**
+   * Updates the musical bar count of a slot, recalculating exact loop BPM
+   * to guarantee zero drift synchronization with master track
+   */
+  public setSlotBars(slotIndex: number, bars: number): void {
+    if (slotIndex < 0 || slotIndex >= this.slots.length) return;
+    const slot = this.slots[slotIndex];
+    if (!slot.audioBuffer) return;
+
+    const duration = slot.audioBuffer.duration;
+    const beats = Math.max(1, Math.round(bars * 4));
+    const newBpm = (beats / duration) * 60;
+
+    slot.totalBeats = beats;
+    slot.activeLoopBeats = beats;
+    slot.normalLoopBeats = beats;
+    slot.bpm = Math.round(newBpm * 100) / 100;
+  }
+
+  /**
+   * Adds a new custom loop slot if room allows
+   */
+  public async addCustomLoopSlot(file: File): Promise<number> {
+    const arrayBuffer = await file.arrayBuffer();
+    const audioBuffer = await this.audioCtx.decodeAudioData(arrayBuffer);
+    const waveform = extractLoopWaveform(audioBuffer, 64);
+    const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
+
+    const duration = audioBuffer.duration;
     const approxBeats = Math.round(duration * (128 / 60));
-    const beats = Math.max(1, Math.min(32, approxBeats));
+    const beats = Math.max(4, Math.min(32, approxBeats));
     const estimatedBpm = Math.round((beats / duration) * 60);
 
     const newSlot = new LoopSlotInstance(this.audioCtx, this.masterLooperGain, {
-      id: `custom-slot-${Date.now()}`,
+      id: `custom-slot-${this.slots.length}-${Date.now()}`,
       name: cleanName,
       category: 'custom',
       bpm: estimatedBpm || 128,
@@ -596,8 +680,11 @@ export class DjLooper {
       waveform
     });
 
-    this.slots[slotIndex].stop();
-    this.slots[slotIndex] = newSlot;
+    newSlot.isUserUploaded = true;
+    newSlot.fileName = file.name;
+
+    this.slots.push(newSlot);
+    return this.slots.length - 1;
   }
 
   /**

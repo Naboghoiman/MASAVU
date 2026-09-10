@@ -296,6 +296,8 @@ export interface LoopSlotData {
   isRollActive: boolean;
   rollBeats: number;
   vuLevel: number;
+  isUserUploaded?: boolean;
+  fileName?: string;
 }
 
 export interface LooperTelemetry {
@@ -310,3 +312,35 @@ export interface LooperTelemetry {
   masterVolume: number;
   slots: LoopSlotData[];
 }
+
+export type SamplerPlayMode = 'oneshot' | 'gate' | 'loop';
+export type SamplerQuantize = 'INSTANT' | 'QUARTER_BEAT' | 'HALF_BEAT' | '1_BEAT';
+
+export interface SamplerPadData {
+  id: string;
+  name: string;
+  color: string;
+  category: 'drum' | 'vocal' | 'fx' | 'synth' | 'drop' | 'custom';
+  audioBuffer: AudioBuffer | null;
+  waveform: Float32Array;
+  isPlaying: boolean;
+  playMode: SamplerPlayMode;
+  volume: number; // 0.0 to 1.5
+  pitchSemitones: number; // -12 to +12
+  tempoSync: boolean;
+  originalBpm: number;
+  quantize: SamplerQuantize;
+  vuLevel: number;
+  isUserUploaded?: boolean;
+  fileName?: string;
+}
+
+export interface SamplerTelemetry {
+  masterVolume: number;
+  syncTargetBpm: number;
+  isMasterSynced: boolean;
+  quantize: SamplerQuantize;
+  tempoSyncAll: boolean;
+  pads: SamplerPadData[];
+}
+

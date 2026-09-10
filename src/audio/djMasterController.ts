@@ -4,10 +4,11 @@
  * continuous PLL Phase-Lock loop, and Beat-Perfect Slave synchronization.
  */
 
-import { ContinuousPhaseLockState, DeckId, DeckTelemetry, LooperTelemetry, PreparedTrack, SlaveStartPlan, TrackData } from '../types/dj';
+import { ContinuousPhaseLockState, DeckId, DeckTelemetry, LooperTelemetry, PreparedTrack, SamplerTelemetry, SlaveStartPlan, TrackData } from '../types/dj';
 import { DjDeck } from './djDeck';
 import { DjSyncEngine } from './djSyncEngine';
 import { DjLooper } from './djLooper';
+import { DjSampler } from './djSampler';
 import { getPresetDJTracks } from './trackGenerator';
 
 export class DjMasterController {
@@ -15,6 +16,7 @@ export class DjMasterController {
   public readonly deckA: DjDeck;
   public readonly deckB: DjDeck;
   public readonly looper: DjLooper;
+  public readonly sampler: DjSampler;
   public readonly syncEngine: DjSyncEngine;
 
   // Master output bus & crossfader
@@ -53,6 +55,9 @@ export class DjMasterController {
 
     // Initialize Sync Looper attached to Master bus
     this.looper = new DjLooper(this.audioCtx, this.masterGainNode);
+
+    // Initialize Performance Sampler attached to Master bus
+    this.sampler = new DjSampler(this.audioCtx, this.masterGainNode);
 
     this.deckAGainNode = this.audioCtx.createGain();
     this.deckBGainNode = this.audioCtx.createGain();
@@ -236,13 +241,14 @@ export class DjMasterController {
         }
       }
 
-      // Update real-time sync for Looper
-      this.looper.updateSyncTick(
-        this.deckA.getTelemetry(),
-        this.deckB.getTelemetry(),
-        this.deckA.getTrack(),
-        this.deckB.getTrack()
-      );
+      // Update real-time sync for Looper & Sampler
+      const telemA = this.deckA.getTelemetry();
+      const telemB = this.deckB.getTelemetry();
+      const trackA = this.deckA.getTrack();
+      const trackB = this.deckB.getTrack();
+
+      this.looper.updateSyncTick(telemA, telemB, trackA, trackB);
+      this.sampler.updateSyncTick(telemA, telemB, trackA, trackB);
 
       this.syncTimerId = window.requestAnimationFrame(evaluate);
     };
@@ -252,6 +258,11 @@ export class DjMasterController {
 
   public getLooperTelemetry(): LooperTelemetry {
     return this.looper.getTelemetry(this.deckA.getTelemetry(), this.deckB.getTelemetry());
+  }
+
+  public getSamplerTelemetry(): SamplerTelemetry {
+    const masterTelem = this.masterDeckId === 'A' ? this.deckA.getTelemetry() : this.deckB.getTelemetry();
+    return this.sampler.getTelemetry(masterTelem);
   }
 
   public getPhaseLockState(): ContinuousPhaseLockState | null {
@@ -426,6 +437,7 @@ export class DjMasterController {
       window.cancelAnimationFrame(this.syncTimerId);
     }
     this.looper.destroy();
+    this.sampler.destroy();
     this.deckA.pause();
     this.deckB.pause();
     if (this.audioCtx.state !== 'closed') {
