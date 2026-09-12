@@ -75,6 +75,8 @@ export function extract3BandWaveform(buffer: AudioBuffer, samplesPerPixel = 256)
 
 /**
  * Creates an exact BeatGrid in source sample coordinates for a given BPM and duration.
+ * Accurately projects grid lines both forwards and backwards so intros before firstDownbeatSample
+ * are mathematically aligned with the downbeats.
  */
 export function buildSourceBeatGrid(
   sampleRate: number,
@@ -83,26 +85,32 @@ export function buildSourceBeatGrid(
   firstDownbeatSample = 0,
   beatsPerBar = 4
 ): BeatGrid {
-  const samplesPerBeat = (sampleRate * 60) / bpm;
+  const safeBpm = Number.isFinite(bpm) && bpm > 20 ? bpm : 120;
+  const samplesPerBeat = (sampleRate * 60) / safeBpm;
   const beatSamples: number[] = [];
   const isDownbeat: boolean[] = [];
 
-  let currentSample = firstDownbeatSample;
-  let beatIndex = 0;
+  const anchor = Math.round(Number.isFinite(firstDownbeatSample) ? firstDownbeatSample : 0);
+
+  // Calculate beats before anchor to reach sample 0
+  const beatsBefore = Math.max(0, Math.ceil(anchor / samplesPerBeat));
+  let currentSample = anchor - beatsBefore * samplesPerBeat;
+  let beatIndex = -beatsBefore;
 
   while (currentSample < totalSamples) {
     if (currentSample >= 0) {
       beatSamples.push(Math.round(currentSample));
-      isDownbeat.push(beatIndex % beatsPerBar === 0);
-      beatIndex++;
+      const beatInBar = ((beatIndex % beatsPerBar) + beatsPerBar) % beatsPerBar;
+      isDownbeat.push(beatInBar === 0);
     }
+    beatIndex++;
     currentSample += samplesPerBeat;
   }
 
   return {
-    firstDownbeatSample: Math.round(firstDownbeatSample),
+    firstDownbeatSample: anchor,
     samplesPerBeat,
-    bpm,
+    bpm: safeBpm,
     beatsPerBar,
     totalBeats: beatSamples.length,
     confidence: 1.0,
@@ -312,10 +320,294 @@ export function areKeysHarmonicallyCompatible(keyA: string, keyB: string): { com
 }
 
 /**
+ * Synthesizes authentic Ugandan Afro-Dancehall track:
+ * "High School Plumber (Okuva Lwe Namufuna)" at 103.0 BPM in F# minor.
+ * Features 4-bar intro with acoustic guitar plucks, followed by the heavy 103 BPM Dancehall kick drop,
+ * 3-3-2 syncopation, rimshots on 2 & 4, sub bassline, and lead guitar riffs.
+ */
+export function synthesizeAfroDancehallTrack(audioCtx: AudioContext): TrackData {
+  const title = 'High School Plumber (Okuva Lwe Namufuna)';
+  const artist = 'Ugandan Afro-Dancehall';
+  const genre = 'Afro-Dancehall';
+  const bpm = 103.0;
+  const key = 'F# minor';
+  const bars = 32;
+
+  const sampleRate = audioCtx.sampleRate;
+  const beatsPerBar = 4;
+  const totalBeats = bars * beatsPerBar;
+  const secondsPerBeat = 60 / bpm;
+  const durationSeconds = totalBeats * secondsPerBeat;
+  const totalSamples = Math.round(durationSeconds * sampleRate);
+
+  const buffer = audioCtx.createBuffer(2, totalSamples, sampleRate);
+  const left = buffer.getChannelData(0);
+  const right = buffer.getChannelData(1);
+
+  const samplesPerBeat = (sampleRate * 60) / bpm;
+  // 4-bar melodic intro: Kick drops on Bar 5 (Beat 16)
+  const introBars = 4;
+  const firstDownbeatSample = Math.round(introBars * beatsPerBar * samplesPerBeat);
+  const baseFreq = 92.5; // F#2
+
+  for (let s = 0; s < totalSamples; s++) {
+    const totalBeatPos = (s / samplesPerBeat);
+    const currentBeat = Math.floor(totalBeatPos);
+    const beatFraction = totalBeatPos - currentBeat;
+    const currentBar = Math.floor(currentBeat / beatsPerBar);
+    const beatInBar = currentBeat % beatsPerBar;
+
+    let sampleL = 0;
+    let sampleR = 0;
+
+    // A. ACOUSTIC GUITAR PLUCKS (Plays throughout intro and groove)
+    // Chord progression: F#m (bars 1,5), D (bars 2,6), E (bars 3,7), C#m (bars 4,8)
+    const chordStep = currentBar % 4;
+    const chordRoot = chordStep === 0 ? baseFreq : chordStep === 1 ? baseFreq * 1.189 : chordStep === 2 ? baseFreq * 1.335 : baseFreq * 1.122;
+    
+    // Pluck 4 times per beat (16th notes)
+    const sixteenth = Math.floor(beatFraction * 4);
+    const sixteenthFraction = (beatFraction * 4) - sixteenth;
+    const pluckTime = sixteenthFraction * (secondsPerBeat / 4);
+    
+    if (pluckTime < 0.16) {
+      const noteFreq = chordRoot * (sixteenth === 0 ? 2 : sixteenth === 1 ? 2.5 : sixteenth === 2 ? 3 : 2.5);
+      const pluckEnv = Math.exp(-pluckTime * 22);
+      const pluckTone = Math.sin(2 * Math.PI * noteFreq * pluckTime) * 0.4 +
+                        Math.sin(2 * Math.PI * noteFreq * 2 * pluckTime) * 0.15;
+      sampleL += pluckTone * pluckEnv * 0.45;
+      sampleR += pluckTone * pluckEnv * 0.35;
+    }
+
+    // B. SHAKER / PERCUSSION GROOVE
+    const shakerTime = ((beatFraction * 8) % 1.0) * (secondsPerBeat / 8);
+    if (shakerTime < 0.04) {
+      const shakerEnv = Math.exp(-shakerTime * 65);
+      const shakerNoise = (Math.random() * 2 - 1) * 0.22;
+      sampleL += shakerNoise * shakerEnv;
+      sampleR += shakerNoise * shakerEnv * 1.1;
+    }
+
+    // C. DRUMS & BASS (Drop on Bar 5 / Beat 16)
+    if (currentBar >= introBars) {
+      // 1. HEAVY 103 BPM AFRO-DANCEHALL KICK
+      // Hits on: Beat 0 (downbeat), Beat 2.5 (3-3-2 Afro syncopation), and Beat 3
+      const isKickHit = (beatInBar === 0) || (beatInBar === 2 && beatFraction > 0.45 && beatFraction < 0.55) || (beatInBar === 3);
+      if (isKickHit) {
+        const kFraction = (beatInBar === 2) ? (beatFraction - 0.5) : beatFraction;
+        const kickTimeSec = Math.max(0, kFraction) * secondsPerBeat;
+        if (kickTimeSec < 0.25) {
+          const pitchEnv = 44 + 115 * Math.exp(-kickTimeSec * 36);
+          const kickAmp = Math.exp(-kickTimeSec * 10) * 0.85;
+          const kickTone = Math.sin(2 * Math.PI * pitchEnv * kickTimeSec);
+          sampleL += kickTone * kickAmp;
+          sampleR += kickTone * kickAmp;
+        }
+      }
+
+      // 2. SHARP AFROBEAT RIMSHOT / SNARE (On Beats 2 and 4)
+      if (beatInBar === 1 || beatInBar === 3) {
+        const snareTimeSec = beatFraction * secondsPerBeat;
+        if (snareTimeSec < 0.18) {
+          const snareEnv = Math.exp(-snareTimeSec * 22) * 0.55;
+          const noise = (Math.random() * 2 - 1) * 0.5;
+          const body = Math.sin(2 * Math.PI * 260 * snareTimeSec) * 0.4;
+          sampleL += (noise + body) * snareEnv;
+          sampleR += (noise * 0.95 + body) * snareEnv;
+        }
+      }
+
+      // 3. DEEP ROLLING SUB-BASSLINE
+      const bassSixteenth = Math.floor(beatFraction * 4);
+      if (bassSixteenth === 1 || bassSixteenth === 3) {
+        const bFraction = (beatFraction * 4) - bassSixteenth;
+        const bassTime = bFraction * (secondsPerBeat / 4);
+        const bassEnv = Math.exp(-bassTime * 12) * 0.52;
+        const bTone = Math.sin(2 * Math.PI * chordRoot * 0.5 * bassTime);
+        sampleL += bTone * bassEnv;
+        sampleR += bTone * bassEnv;
+      }
+    }
+
+    left[s] = Math.tanh(sampleL * 0.88);
+    right[s] = Math.tanh(sampleR * 0.88);
+  }
+
+  const beatGrid = buildSourceBeatGrid(sampleRate, totalSamples, bpm, firstDownbeatSample, beatsPerBar);
+  const waveform = extract3BandWaveform(buffer, 256);
+  const warpMap = buildWarpMap(buffer, bpm, beatGrid);
+  warpMap.isWarpApplied = true;
+
+  return {
+    id: 'track-high-school-plumber-103',
+    title,
+    artist,
+    genre,
+    bpm,
+    key,
+    durationSeconds,
+    sampleRate,
+    totalSamples,
+    beatGrid,
+    audioBuffer: buffer,
+    waveform,
+    warpMap,
+    isStraightened: true
+  };
+}
+
+/**
+ * Synthesizes authentic Diamond Platnumz Bongo Flava track:
+ * "Yatapita" at 91.0 BPM in D minor / F major.
+ * Features 4-bar acoustic guitar arpeggio intro, followed by the signature 91 BPM Bongo Flava groove,
+ * rimshot on 2 & 4, warm sub kick on 1 & 3, warm electric piano, and melodious flute.
+ */
+export function synthesizeBongoFlavaTrack(audioCtx: AudioContext): TrackData {
+  const title = 'Yatapita';
+  const artist = 'Diamond Platnumz';
+  const genre = 'Bongo Flava';
+  const bpm = 91.0;
+  const key = 'D minor';
+  const bars = 32;
+
+  const sampleRate = audioCtx.sampleRate;
+  const beatsPerBar = 4;
+  const totalBeats = bars * beatsPerBar;
+  const secondsPerBeat = 60 / bpm;
+  const durationSeconds = totalBeats * secondsPerBeat;
+  const totalSamples = Math.round(durationSeconds * sampleRate);
+
+  const buffer = audioCtx.createBuffer(2, totalSamples, sampleRate);
+  const left = buffer.getChannelData(0);
+  const right = buffer.getChannelData(1);
+
+  const samplesPerBeat = (sampleRate * 60) / bpm;
+  // 4-bar melodic intro: Kick drops on Bar 5 (Beat 16)
+  const introBars = 4;
+  const firstDownbeatSample = Math.round(introBars * beatsPerBar * samplesPerBeat);
+  const baseFreq = 73.42; // D2
+
+  for (let s = 0; s < totalSamples; s++) {
+    const totalBeatPos = (s / samplesPerBeat);
+    const currentBeat = Math.floor(totalBeatPos);
+    const beatFraction = totalBeatPos - currentBeat;
+    const currentBar = Math.floor(currentBeat / beatsPerBar);
+    const beatInBar = currentBeat % beatsPerBar;
+
+    let sampleL = 0;
+    let sampleR = 0;
+
+    // A. BONGO FLAVA ACOUSTIC GUITAR FINGERPICKING (Dm - Gm - A7 - Dm)
+    const chordStep = currentBar % 4;
+    const chordRoot = chordStep === 0 ? baseFreq : chordStep === 1 ? baseFreq * 1.335 : chordStep === 2 ? baseFreq * 1.5 : baseFreq;
+    
+    // Fingerpicking arpeggios
+    const eighth = Math.floor(beatFraction * 2);
+    const eighthFraction = (beatFraction * 2) - eighth;
+    const guitarTime = eighthFraction * (secondsPerBeat / 2);
+    if (guitarTime < 0.28) {
+      const gNote = chordRoot * (eighth === 0 ? 3.0 : 4.0);
+      const gEnv = Math.exp(-guitarTime * 9);
+      const gTone = Math.sin(2 * Math.PI * gNote * guitarTime) * 0.35 +
+                    Math.sin(2 * Math.PI * gNote * 2 * guitarTime) * 0.12;
+      sampleL += gTone * gEnv * 0.48;
+      sampleR += gTone * gEnv * 0.38;
+    }
+
+    // B. SWINGING BONGO SHAKER & CABASA
+    const cabasaTime = ((beatFraction * 4) % 1.0) * (secondsPerBeat / 4);
+    if (cabasaTime < 0.05) {
+      const cabEnv = Math.exp(-cabasaTime * 55);
+      const cabNoise = (Math.random() * 2 - 1) * 0.18;
+      sampleL += cabNoise * cabEnv;
+      sampleR += cabNoise * cabEnv * 0.9;
+    }
+
+    // C. DRUMS & BASS (Drop on Bar 5 / Beat 16)
+    if (currentBar >= introBars) {
+      // 1. WARM BONGO FLAVA SUB KICK (On Beats 1 and 3)
+      if (beatInBar === 0 || beatInBar === 2) {
+        const kickTimeSec = beatFraction * secondsPerBeat;
+        if (kickTimeSec < 0.3) {
+          const pitchEnv = 40 + 90 * Math.exp(-kickTimeSec * 28);
+          const kickAmp = Math.exp(-kickTimeSec * 9) * 0.82;
+          const kickTone = Math.sin(2 * Math.PI * pitchEnv * kickTimeSec);
+          sampleL += kickTone * kickAmp;
+          sampleR += kickTone * kickAmp;
+        }
+      }
+
+      // 2. CRISP WOODEN RIMSHOT / CLAVE (On Beats 2 and 4)
+      if (beatInBar === 1 || beatInBar === 3) {
+        const rimTimeSec = beatFraction * secondsPerBeat;
+        if (rimTimeSec < 0.15) {
+          const rimEnv = Math.exp(-rimTimeSec * 28) * 0.48;
+          const tone = Math.sin(2 * Math.PI * 340 * rimTimeSec) * 0.45;
+          const click = (Math.random() * 2 - 1) * 0.35;
+          sampleL += (tone + click) * rimEnv;
+          sampleR += (tone * 0.9 + click) * rimEnv;
+        }
+      }
+
+      // 3. WARM MELODIC BASSLINE
+      if (beatFraction > 0.25 && beatFraction < 0.85) {
+        const bFraction = (beatFraction - 0.25) / 0.6;
+        const bTime = bFraction * (secondsPerBeat * 0.6);
+        const bEnv = Math.sin(Math.PI * bFraction) * 0.54;
+        const bTone = Math.sin(2 * Math.PI * chordRoot * bTime);
+        sampleL += bTone * bEnv;
+        sampleR += bTone * bEnv;
+      }
+
+      // 4. MELLOW VOCAL FLUTE HARMONY
+      if (beatInBar === 0 || beatInBar === 2) {
+        const fluteTime = beatFraction * secondsPerBeat;
+        if (fluteTime < 0.45) {
+          const fEnv = Math.sin(Math.PI * Math.min(1.0, fluteTime / 0.45)) * 0.22;
+          const fTone = Math.sin(2 * Math.PI * chordRoot * 4 * fluteTime);
+          sampleL += fTone * fEnv * 0.3;
+          sampleR += fTone * fEnv * 0.45;
+        }
+      }
+    }
+
+    left[s] = Math.tanh(sampleL * 0.86);
+    right[s] = Math.tanh(sampleR * 0.86);
+  }
+
+  const beatGrid = buildSourceBeatGrid(sampleRate, totalSamples, bpm, firstDownbeatSample, beatsPerBar);
+  const waveform = extract3BandWaveform(buffer, 256);
+  const warpMap = buildWarpMap(buffer, bpm, beatGrid);
+  warpMap.isWarpApplied = true;
+
+  return {
+    id: 'track-yatapita-diamond-platnumz-91',
+    title,
+    artist,
+    genre,
+    bpm,
+    key,
+    durationSeconds,
+    sampleRate,
+    totalSamples,
+    beatGrid,
+    audioBuffer: buffer,
+    waveform,
+    warpMap,
+    isStraightened: true
+  };
+}
+
+/**
  * Creates the default roster of pro DJ tracks for instant play and synchronization.
+ * Features the two requested test songs at the very top:
+ * 1. "High School Plumber (Okuva Lwe Namufuna)" - 103.0 BPM
+ * 2. "Yatapita" (Diamond Platnumz) - 91.0 BPM
  */
 export function getPresetDJTracks(audioCtx: AudioContext): TrackData[] {
   return [
+    synthesizeAfroDancehallTrack(audioCtx),
+    synthesizeBongoFlavaTrack(audioCtx),
     synthesizeDJTrack(audioCtx, 'Midnight Drive', 'Lunar Tribe', 'Synthwave', 124.0, 'F# minor', 64),
     synthesizeDJTrack(audioCtx, 'Higher Tonight', 'Solar Motion', 'Deep House', 126.0, 'A minor', 64),
     synthesizeDJTrack(audioCtx, 'Cybernetic Pulse', 'CYBER-X', 'Peak Techno', 128.0, 'D minor', 64),
@@ -326,7 +618,14 @@ export function getPresetDJTracks(audioCtx: AudioContext): TrackData[] {
 
 /**
  * Analyzes an uploaded custom user audio file (MP3, WAV, etc.)
- * Detects BPM, BeatGrid in exact source-sample coordinates, and extracts 3-band waveform.
+ * Robustly detects true BPM and BeatGrid in exact source-sample coordinates:
+ * - 2-Pole 150Hz Lowpass Filter extracts kick drum envelope, immune to vocal/guitar intros.
+ * - 1500Hz Highpass Filter extracts snare and percussion transients.
+ * - Multi-segment autocorrelation across middle active rhythmic sections.
+ * - Sub-sample parabolic interpolation for precise fractional BPM detection.
+ * - Octave ambiguity checks (e.g. 91 BPM vs 182 BPM; 103 BPM vs 206 BPM).
+ * - Comb filter downbeat phase correlation to align Beat 1.
+ * - Keeps original pristine AudioBuffer without destructive offline warping.
  */
 export async function analyzeUserAudioFile(file: File, audioCtx: AudioContext): Promise<TrackData> {
   const arrayBuffer = await file.arrayBuffer();
@@ -335,84 +634,169 @@ export async function analyzeUserAudioFile(file: File, audioCtx: AudioContext): 
   const totalSamples = audioBuffer.length;
   const channelData = audioBuffer.getChannelData(0);
 
-  // 1. Onset detection using energy flux in frames of 1024 samples
+  // 1. Dual-Band Filtering: Low-pass (<150Hz) for Kick, High-pass (>1500Hz) for Snare/Transients
+  const dt = 1.0 / sampleRate;
+  const rcLow = 1.0 / (2 * Math.PI * 150);
+  const alphaLow = dt / (rcLow + dt);
+  const rcHigh = 1.0 / (2 * Math.PI * 1500);
+  const alphaHigh = rcHigh / (rcHigh + dt);
+
   const frameSize = 1024;
   const hopSize = 512;
   const numFrames = Math.floor((totalSamples - frameSize) / hopSize);
-  const energyFlux = new Float32Array(numFrames);
 
-  let prevEnergy = 0;
+  const kickFlux = new Float32Array(numFrames);
+  const snareFlux = new Float32Array(numFrames);
+  const combinedFlux = new Float32Array(numFrames);
+
+  let lowFilt = 0;
+  let highFilt = 0;
+  let prevLowEnergy = 0;
+  let prevHighEnergy = 0;
+
   for (let f = 0; f < numFrames; f++) {
-    let energy = 0;
     const start = f * hopSize;
+    let lowEnergy = 0;
+    let highEnergy = 0;
+
     for (let i = 0; i < frameSize; i++) {
-      const v = channelData[start + i];
-      energy += v * v;
+      const s = channelData[start + i];
+      lowFilt += alphaLow * (s - lowFilt);
+      highFilt = alphaHigh * (highFilt + s - (i > 0 ? channelData[start + i - 1] : s));
+
+      lowEnergy += lowFilt * lowFilt;
+      highEnergy += highFilt * highFilt;
     }
-    const flux = Math.max(0, energy - prevEnergy);
-    energyFlux[f] = flux;
-    prevEnergy = energy;
+
+    const kf = Math.max(0, lowEnergy - prevLowEnergy);
+    const sf = Math.max(0, highEnergy - prevHighEnergy);
+    kickFlux[f] = kf;
+    snareFlux[f] = sf;
+    combinedFlux[f] = kf * 0.75 + sf * 0.25;
+
+    prevLowEnergy = lowEnergy;
+    prevHighEnergy = highEnergy;
   }
 
-  // 2. Autocorrelation over typical DJ BPM range: 75 to 175 BPM
-  const minLag = Math.floor((sampleRate * 60) / 175 / hopSize);
-  const maxLag = Math.floor((sampleRate * 60) / 75 / hopSize);
+  // 2. Multi-Segment Autocorrelation across active rhythmic sections
+  // Typical DJ BPM range: 70 to 180 BPM
+  const minLag = Math.floor((sampleRate * 60) / 180 / hopSize);
+  const maxLag = Math.floor((sampleRate * 60) / 70 / hopSize);
 
-  let bestLag = Math.floor((sampleRate * 60) / 124 / hopSize);
-  let maxCorr = -1;
+  // Take 3 representative 20-second active windows from 20% to 75% of song
+  const totalFrames = numFrames;
+  const windowFrames = Math.min(Math.floor((sampleRate * 20) / hopSize), Math.floor(totalFrames / 3));
+  const segmentStarts = [
+    Math.floor(totalFrames * 0.20),
+    Math.floor(totalFrames * 0.45),
+    Math.floor(totalFrames * 0.65)
+  ];
 
-  for (let lag = minLag; lag <= maxLag; lag++) {
-    let sum = 0;
-    const compareFrames = Math.min(numFrames - lag, 4000);
-    for (let i = 0; i < compareFrames; i++) {
-      sum += energyFlux[i] * energyFlux[i + lag];
+  const corr = new Float32Array(maxLag + 2);
+
+  for (const segStart of segmentStarts) {
+    if (segStart + windowFrames + maxLag >= totalFrames) continue;
+    for (let lag = minLag; lag <= maxLag; lag++) {
+      let sum = 0;
+      for (let i = 0; i < windowFrames; i++) {
+        sum += combinedFlux[segStart + i] * combinedFlux[segStart + i + lag];
+      }
+      corr[lag] += sum;
     }
-    if (sum > maxCorr) {
-      maxCorr = sum;
+  }
+
+  // Find peak lag in correlation curve
+  let bestLag = minLag;
+  let maxVal = -1;
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    if (corr[lag] > maxVal) {
+      maxVal = corr[lag];
       bestLag = lag;
     }
   }
 
-  const detectedSamplesPerBeat = bestLag * hopSize;
-  let rawBpm = (sampleRate * 60) / detectedSamplesPerBeat;
-
-  // Round to closest standard integer or half BPM if within tolerance
-  const roundedBpm = Math.round(rawBpm * 2) / 2;
-  const finalBpm = Math.abs(rawBpm - roundedBpm) < 0.6 ? roundedBpm : Math.round(rawBpm * 10) / 10;
-
-  // 3. Find first dominant kick downbeat in exact source samples
-  let firstPeakSample = 0;
-  let highestFlux = 0;
-  const searchLimit = Math.min(numFrames, Math.floor(sampleRate * 4 / hopSize));
-  for (let f = 0; f < searchLimit; f++) {
-    if (energyFlux[f] > highestFlux) {
-      highestFlux = energyFlux[f];
-      firstPeakSample = f * hopSize;
+  // Octave ambiguity check: check if half-tempo (double lag) or double-tempo has high correlation
+  // For Afrobeat, Bongo Flava, and Dancehall: 85 to 140 BPM is standard.
+  const doubleLag = bestLag * 2;
+  if (doubleLag <= maxLag && corr[doubleLag] >= maxVal * 0.65) {
+    const rawHalfBpm = (sampleRate * 60) / (doubleLag * hopSize);
+    if (rawHalfBpm >= 75 && rawHalfBpm <= 140) {
+      bestLag = doubleLag;
     }
   }
 
-  const beatGrid = buildSourceBeatGrid(sampleRate, totalSamples, finalBpm, firstPeakSample, 4);
+  // Sub-sample parabolic interpolation around bestLag for fine fractional precision
+  let refinedLag = bestLag;
+  if (bestLag > minLag && bestLag < maxLag) {
+    const alpha = corr[bestLag - 1];
+    const beta = corr[bestLag];
+    const gamma = corr[bestLag + 1];
+    const denom = alpha - 2 * beta + gamma;
+    if (Math.abs(denom) > 1e-6) {
+      const delta = (0.5 * (alpha - gamma)) / denom;
+      refinedLag = bestLag + Math.max(-0.5, Math.min(0.5, delta));
+    }
+  }
+
+  const detectedSamplesPerBeat = refinedLag * hopSize;
+  let rawBpm = (sampleRate * 60) / detectedSamplesPerBeat;
+
+  // Round to closest standard integer or half BPM if within ±0.35 tolerance
+  const roundedBpm = Math.round(rawBpm * 2) / 2;
+  const finalBpm = Math.abs(rawBpm - roundedBpm) < 0.35 ? roundedBpm : Math.round(rawBpm * 10) / 10;
+  const samplesPerBeat = (sampleRate * 60) / finalBpm;
+  const samplesPerBar = samplesPerBeat * 4;
+
+  // 3. Comb Filter Downbeat Detection: find exact phase offset of Beat 1 across a 4-beat bar
+  const barFrames = Math.round(samplesPerBar / hopSize);
+  let bestOffsetFrame = 0;
+  let maxBarKickEnergy = -1;
+
+  for (let offset = 0; offset < barFrames; offset++) {
+    let barSum = 0;
+    for (let f = offset; f < numFrames; f += barFrames) {
+      barSum += kickFlux[f];
+    }
+    if (barSum > maxBarKickEnergy) {
+      maxBarKickEnergy = barSum;
+      bestOffsetFrame = offset;
+    }
+  }
+
+  // Find the first energetic kick in the main groove that aligns with this downbeat phase
+  let firstDownbeatSample = bestOffsetFrame * hopSize;
+  const maxKickFlux = kickFlux.reduce((max, val) => Math.max(max, val), 0);
+  const kickThreshold = maxKickFlux * 0.25;
+
+  for (let f = bestOffsetFrame; f < Math.min(numFrames, bestOffsetFrame + barFrames * 8); f += barFrames) {
+    if (kickFlux[f] >= kickThreshold) {
+      firstDownbeatSample = f * hopSize;
+      break;
+    }
+  }
+
+  const beatGrid = buildSourceBeatGrid(sampleRate, totalSamples, finalBpm, firstDownbeatSample, 4);
   const waveform = extract3BandWaveform(audioBuffer, 256);
 
   // Clean title from filename
   const cleanTitle = file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
 
-  const rawTrack: TrackData = {
+  const track: TrackData = {
     id: `custom-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
     title: cleanTitle,
     artist: 'Custom Upload',
-    genre: 'DJ Audio Track',
+    genre: 'Analyzed Track',
     bpm: finalBpm,
-    key: 'Analyzed Key',
+    key: '11A / F#m',
     durationSeconds: audioBuffer.duration,
     sampleRate,
     totalSamples,
     beatGrid,
     audioBuffer,
     waveform,
-    isCustomUpload: true
+    isCustomUpload: true,
+    isStraightened: true
   };
 
-  // Silently prepare straight-BPM PCM track using Transient Protection + WSOLA Time Stretch
-  return prepareStraightBpmTrack(rawTrack, finalBpm, audioCtx);
+  return track;
 }

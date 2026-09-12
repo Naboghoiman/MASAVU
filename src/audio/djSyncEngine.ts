@@ -16,17 +16,17 @@ import {
 } from '../types/dj';
 
 export const DEFAULT_PLL_CONFIG: PLLControllerConfig = {
-  // Proportional gain tuned for 2-4 beat smooth drift convergence
-  kp: 0.65,
+  // Proportional gain tuned for smooth drift convergence without flutter
+  kp: 0.5,
   // Integral gain for zero steady-state phase error
-  ki: 0.12,
-  // Deadband threshold: ±1.5 milliseconds (no micro-flanging or jitter)
-  deadbandSeconds: 0.0015,
+  ki: 0.05,
+  // Deadband threshold: ±2.5 milliseconds (rock solid lock, no jitter)
+  deadbandSeconds: 0.0025,
   // Correction window duration in beats
   correctionWindowBeats: 3.0,
-  // Bounded tempo correction limit (±8% maximum pitch bend)
-  maxCorrectionFraction: 0.08,
-  // Severe error threshold: > 0.25 beat (triggers smooth crossfaded re-anchor)
+  // Bounded tempo correction limit (±2.5% maximum subtle pitch bend, musically imperceptible)
+  maxCorrectionFraction: 0.025,
+  // Severe error threshold: > 0.25 beat
   severeErrorThresholdSeconds: 0.14
 };
 
@@ -269,10 +269,23 @@ export class DjSyncEngine {
     const beatPeriodSeconds = 60 / safeMasterBpm;
     const halfBeatPeriod = beatPeriodSeconds * 0.5;
 
+    const safeMasterGrid = masterBeatGrid || {
+      firstDownbeatSample: 0,
+      samplesPerBeat: (44100 * 60) / safeMasterBpm,
+      beatsPerBar: 4,
+      totalBeats: 1000
+    };
+    const safeSlaveGrid = slaveBeatGrid || {
+      firstDownbeatSample: 0,
+      samplesPerBeat: (44100 * 60) / (safeMasterBpm / (baseTempoMultiplier || 1)),
+      beatsPerBar: 4,
+      totalBeats: 1000
+    };
+
     // 1. Predict continuous Master beat phase [0, 1) and next beat output time
     const safeMasterCurrent = Number.isFinite(masterCurrentSourceSample) ? masterCurrentSourceSample : 0;
-    const masterOffset = safeMasterCurrent - masterBeatGrid.firstDownbeatSample;
-    const masterBeatPos = masterBeatGrid.samplesPerBeat > 0 ? masterOffset / masterBeatGrid.samplesPerBeat : 0;
+    const masterOffset = safeMasterCurrent - (safeMasterGrid.firstDownbeatSample || 0);
+    const masterBeatPos = safeMasterGrid.samplesPerBeat > 0 ? masterOffset / safeMasterGrid.samplesPerBeat : 0;
     let masterPhase = masterBeatPos - Math.floor(masterBeatPos);
     if (!Number.isFinite(masterPhase) || masterPhase < 0) masterPhase = 0;
     else if (masterPhase >= 1.0) masterPhase = 0.9999;
@@ -282,8 +295,8 @@ export class DjSyncEngine {
 
     // Predict continuous Slave beat phase [0, 1) and next beat output time
     const safeSlaveCurrent = Number.isFinite(slaveCurrentSourceSample) ? slaveCurrentSourceSample : 0;
-    const slaveOffset = safeSlaveCurrent - slaveBeatGrid.firstDownbeatSample;
-    const slaveBeatPos = slaveBeatGrid.samplesPerBeat > 0 ? slaveOffset / slaveBeatGrid.samplesPerBeat : 0;
+    const slaveOffset = safeSlaveCurrent - (safeSlaveGrid.firstDownbeatSample || 0);
+    const slaveBeatPos = safeSlaveGrid.samplesPerBeat > 0 ? slaveOffset / safeSlaveGrid.samplesPerBeat : 0;
     let slavePhase = slaveBeatPos - Math.floor(slaveBeatPos);
     if (!Number.isFinite(slavePhase) || slavePhase < 0) slavePhase = 0;
     else if (slavePhase >= 1.0) slavePhase = 0.9999;
@@ -365,9 +378,11 @@ export class DjSyncEngine {
     return {
       phaseErrorSeconds: rawPhaseErrorSeconds,
       phaseErrorMs,
+      instantaneousPhaseErrorMs: phaseErrorMs,
       wrappedErrorSeconds,
       phaseErrorDegrees,
       inDeadband,
+      isPhaseLocked: status === 'locked' || inDeadband,
       correctionFraction,
       integralAccumulator: this.integralAccumulator,
       baseTempoMultiplier,

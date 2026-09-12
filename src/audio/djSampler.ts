@@ -264,8 +264,8 @@ export class DjSampler {
       targetBeatBoundary = Math.ceil(beatsFromDownbeat * 4) / 4;
     }
 
-    const samplesToWait = (firstDownbeat + targetBeatBoundary * samplesPerBeat) - currentSample;
-    const secondsToWait = samplesToWait / (targetTrack.sampleRate * (targetBpm / targetTrack.bpm));
+    const beatsToWait = targetBeatBoundary - beatsFromDownbeat;
+    const secondsToWait = beatsToWait * (60 / targetBpm);
     const scheduledAudioTime = now + Math.max(0.005, secondsToWait);
 
     pad.trigger(scheduledAudioTime, targetBpm, velocity);

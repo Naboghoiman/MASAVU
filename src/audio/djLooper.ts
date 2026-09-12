@@ -51,6 +51,7 @@ class LoopSlotInstance {
   public anchorSample = 0;
   public currentSourceSample = 0;
   public currentRate = 1.0;
+  public lastTickAudioTime = 0;
 
   constructor(
     private audioCtx: AudioContext,
@@ -138,18 +139,23 @@ class LoopSlotInstance {
     // Loop bounds based on activeLoopBeats
     const secondsPerBeat = 60 / this.bpm;
     const loopDuration = this.activeLoopBeats * secondsPerBeat;
+    const maxDuration = this.audioBuffer.duration;
     source.loopStart = 0;
-    source.loopEnd = loopDuration;
+    source.loopEnd = Math.min(maxDuration, Math.max(0.01, loopDuration));
 
     source.connect(this.filterNode);
 
     const safeStart = Math.max(this.audioCtx.currentTime, startTime);
-    source.start(safeStart, startSampleOffset / this.audioBuffer.sampleRate);
+    const maxOffset = Math.max(0, this.audioBuffer.duration - 0.001);
+    const safeOffsetSeconds = Math.min(maxOffset, Math.max(0, startSampleOffset / this.audioBuffer.sampleRate));
+    source.start(safeStart, safeOffsetSeconds);
 
     this.sourceNode = source;
     this.isPlaying = true;
     this.anchorAudioTime = safeStart;
     this.anchorSample = startSampleOffset;
+    this.currentSourceSample = startSampleOffset;
+    this.lastTickAudioTime = safeStart;
   }
 
   public stop() {
@@ -334,58 +340,32 @@ export class DjLooper {
       }
 
       if (slot.isPlaying && slot.sourceNode) {
-        // Continuous source sample position tracking
-        const elapsed = Math.max(0, now - slot.anchorAudioTime);
-        const advanceSamples = elapsed * slot.currentRate * slot.audioBuffer.sampleRate;
-        const totalSampleLen = slot.activeLoopBeats * ((slot.audioBuffer.sampleRate * 60) / slot.bpm);
-        
-        let samplePos = slot.anchorSample + advanceSamples;
-        if (totalSampleLen > 0) {
-          samplePos = ((samplePos % totalSampleLen) + totalSampleLen) % totalSampleLen;
+        // Continuous, non-jumping source sample position tracking
+        if (now >= slot.anchorAudioTime) {
+          const dt = slot.lastTickAudioTime > 0 ? Math.max(0, Math.min(0.2, now - slot.lastTickAudioTime)) : 0;
+          slot.lastTickAudioTime = now;
+          const advanceSamples = dt * slot.currentRate * slot.audioBuffer.sampleRate;
+          const totalSampleLen = slot.activeLoopBeats * ((slot.audioBuffer.sampleRate * 60) / slot.bpm);
+          
+          let samplePos = slot.currentSourceSample + advanceSamples;
+          if (totalSampleLen > 0) {
+            samplePos = ((samplePos % totalSampleLen) + totalSampleLen) % totalSampleLen;
+          }
+          slot.currentSourceSample = samplePos;
+        } else {
+          slot.currentSourceSample = slot.anchorSample;
         }
-        slot.currentSourceSample = samplePos;
 
         // Base rate needed to match target BPM
         const baseRate = effectiveBpm / slot.bpm;
 
-        // If target deck is playing, perform micro phase alignment
-        if (isTargetPlaying && targetTelem && targetTrack) {
-          const masterBeatFloat = targetTelem.currentBeatIndex + targetTelem.beatPhase;
-          const slotSamplesPerBeat = (slot.audioBuffer.sampleRate * 60) / slot.bpm;
-          const slotBeatFloat = slot.currentSourceSample / slotSamplesPerBeat;
-
-          // Phase error relative to current loop length
-          const masterMod = ((masterBeatFloat % slot.activeLoopBeats) + slot.activeLoopBeats) % slot.activeLoopBeats;
-          const slotMod = ((slotBeatFloat % slot.activeLoopBeats) + slot.activeLoopBeats) % slot.activeLoopBeats;
-
-          let phaseDiff = slotMod - masterMod;
-          if (phaseDiff > slot.activeLoopBeats * 0.5) phaseDiff -= slot.activeLoopBeats;
-          if (phaseDiff < -slot.activeLoopBeats * 0.5) phaseDiff += slot.activeLoopBeats;
-
-          // If phase drift exceeds 1.5% of a beat, gently nudge
-          let rateNudge = 0;
-          if (Math.abs(phaseDiff) > 0.015) {
-            rateNudge = -Math.sign(phaseDiff) * Math.min(0.04, Math.abs(phaseDiff) * 0.35);
-          }
-
-          const targetRate = baseRate * (1.0 + rateNudge);
-          if (Math.abs(targetRate - slot.currentRate) > 0.0005) {
-            slot.currentRate = targetRate;
-            try {
-              slot.sourceNode.playbackRate.setTargetAtTime(targetRate, now, 0.025);
-            } catch {
-              slot.sourceNode.playbackRate.value = targetRate;
-            }
-          }
-        } else {
-          // Free running or target stopped: hold exact base rate
-          if (Math.abs(baseRate - slot.currentRate) > 0.0005) {
-            slot.currentRate = baseRate;
-            try {
-              slot.sourceNode.playbackRate.setTargetAtTime(baseRate, now, 0.025);
-            } catch {
-              slot.sourceNode.playbackRate.value = baseRate;
-            }
+        if (Math.abs(baseRate - slot.currentRate) > 0.0005) {
+          slot.currentRate = baseRate;
+          try {
+            slot.sourceNode.playbackRate.cancelScheduledValues(now);
+            slot.sourceNode.playbackRate.setTargetAtTime(baseRate, now, 0.025);
+          } catch {
+            slot.sourceNode.playbackRate.value = baseRate;
           }
         }
       }
@@ -419,17 +399,25 @@ export class DjLooper {
     const isTargetPlaying = Boolean(targetTelem?.isPlaying);
     const now = this.audioCtx.currentTime;
 
-    if (!isTargetPlaying || this.quantize === 'INSTANT' || !targetTrack || !targetTelem) {
-      // Start immediately
+    if (!isTargetPlaying || !targetTrack || !targetTelem) {
+      // Start immediately at downbeat
       slot.play(now, targetBpm, 0);
       return;
     }
 
-    // Calculate exact AudioContext time of the next quantized beat or bar boundary
-    const samplesPerBeat = (targetTrack.sampleRate * 60) / targetBpm;
-    const firstDownbeat = targetTrack.beatGrid.firstDownbeatSample || 0;
+    // Measure active song beat grid
+    const songGrid = targetTrack.beatGrid;
+    const samplesPerBeat = songGrid.samplesPerBeat > 0 ? songGrid.samplesPerBeat : (targetTrack.sampleRate * 60) / targetBpm;
+    const firstDownbeat = songGrid.firstDownbeatSample || 0;
     const currentSample = targetTelem.currentSourceSample;
     const beatsFromDownbeat = (currentSample - firstDownbeat) / samplesPerBeat;
+
+    if (this.quantize === 'INSTANT') {
+      const beatInSlot = ((beatsFromDownbeat % slot.activeLoopBeats) + slot.activeLoopBeats) % slot.activeLoopBeats;
+      const startSampleInLoop = beatInSlot * ((slot.audioBuffer.sampleRate * 60) / slot.bpm);
+      slot.play(now, targetBpm, startSampleInLoop);
+      return;
+    }
 
     let targetBeatBoundary: number;
     let startSampleInLoop = 0;
@@ -442,18 +430,30 @@ export class DjLooper {
     } else if (this.quantize === 'HALF_BEAT') {
       // Launch on next half beat
       targetBeatBoundary = Math.ceil(beatsFromDownbeat * 2) / 2;
-      const beatInSlot = targetBeatBoundary % slot.activeLoopBeats;
+      const beatInSlot = ((targetBeatBoundary % slot.activeLoopBeats) + slot.activeLoopBeats) % slot.activeLoopBeats;
       startSampleInLoop = beatInSlot * ((slot.audioBuffer.sampleRate * 60) / slot.bpm);
     } else {
       // 1_BEAT: Launch on next integer beat
       targetBeatBoundary = Math.floor(beatsFromDownbeat) + 1;
-      const beatInSlot = targetBeatBoundary % slot.activeLoopBeats;
+      const beatInSlot = ((targetBeatBoundary % slot.activeLoopBeats) + slot.activeLoopBeats) % slot.activeLoopBeats;
       startSampleInLoop = beatInSlot * ((slot.audioBuffer.sampleRate * 60) / slot.bpm);
     }
 
-    const samplesToWait = (firstDownbeat + targetBeatBoundary * samplesPerBeat) - currentSample;
-    const secondsToWait = samplesToWait / (targetTrack.sampleRate * (targetBpm / targetTrack.bpm));
-    const scheduledAudioTime = now + Math.max(0.01, secondsToWait);
+    let beatsToWait = targetBeatBoundary - beatsFromDownbeat;
+    let secondsToWait = beatsToWait * (60 / targetBpm);
+    if (secondsToWait < 0.035) {
+      if (this.quantize === '1_BAR') {
+        targetBeatBoundary += 4;
+      } else if (this.quantize === 'HALF_BEAT') {
+        targetBeatBoundary += 0.5;
+      } else {
+        targetBeatBoundary += 1.0;
+      }
+      beatsToWait = targetBeatBoundary - beatsFromDownbeat;
+      secondsToWait = beatsToWait * (60 / targetBpm);
+    }
+
+    const scheduledAudioTime = now + secondsToWait;
 
     slot.isPendingQuantize = true;
     slot.pendingStartTime = scheduledAudioTime;

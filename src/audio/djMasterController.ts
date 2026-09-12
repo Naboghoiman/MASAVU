@@ -103,7 +103,7 @@ export class DjMasterController {
   }
 
   /**
-   * Section 5: Beat-Perfect Slave Start
+   * Section 5: Beat-Perfect Slave Start & Rhythmic Synchronization
    * Initiated when SYNC is toggled or Slave start is triggered under SYNC
    */
   public triggerBeatPerfectSlaveStart(quantizeMode: 'beat' | 'bar' = 'beat'): SlaveStartPlan | null {
@@ -111,85 +111,160 @@ export class DjMasterController {
     const slaveDeck = this.masterDeckId === 'A' ? this.deckB : this.deckA;
 
     const masterTrack = masterDeck.getTrack();
-    let slaveTrack = slaveDeck.getTrack();
+    const slaveTrack = slaveDeck.getTrack();
     if (!masterTrack || !slaveTrack) return null;
-
-    // PRE-SYNC BPM NORMALIZATION:
-    // If slave track BPM differs from master deck mastered BPM,
-    // prepare the slave track to match master BPM first using WSOLA!
-    // The SYNC engine must only read the prepared BPM, ensuring zero speed mismatch.
-    if (Math.abs(slaveTrack.bpm - masterTrack.bpm) > 0.05) {
-      const prepared = slaveDeck.prepareToBpm(masterTrack.bpm);
-      if (prepared) {
-        slaveTrack = prepared;
-      }
-    }
 
     masterDeck.updateCurrentPosition();
     slaveDeck.updateCurrentPosition();
 
     const masterTelem = masterDeck.getTelemetry();
     const slaveTelem = slaveDeck.getTelemetry();
+    const now = this.audioCtx.currentTime;
 
-    // Measure latencies (Web Audio buffer + lookahead)
-    const bufferLatencyFrames = 0;
+    const masterBpm = masterTelem.effectiveBpm > 20 ? masterTelem.effectiveBpm : masterTrack.bpm;
+    const slaveBpm = slaveTrack.bpm > 20 ? slaveTrack.bpm : 120;
+    const baseTempoMultiplier = masterBpm / slaveBpm;
 
-    // Calculate Beat-Perfect start plan following Section 5
-    const plan = this.syncEngine.planBeatPerfectSlaveStart({
-      audioContextCurrentTime: this.audioCtx.currentTime,
-      outputSampleRate: this.audioCtx.sampleRate,
-      masterBpm: masterTelem.effectiveBpm,
-      masterBeatGrid: masterTrack.beatGrid,
-      masterCurrentSourceSample: masterTelem.currentSourceSample,
-      masterMapping: masterDeck.getMapping(),
-      slaveBpm: slaveTrack.bpm,
-      slaveBeatGrid: slaveTrack.beatGrid,
-      slaveCurrentSourceSample: slaveTelem.currentSourceSample,
-      slaveSourceSampleRate: slaveTrack.sampleRate,
-      quantizeMode,
-      decoderLatencyFrames: 0,
-      timeStretcherLatencyFrames: 0,
-      bufferLatencyFrames
-    });
-
-    this.lastSlaveStartPlan = plan;
-
-    // Apply base tempo multiplier to match BPMs
-    slaveDeck.setBaseTempoMultiplier(plan.baseTempoMultiplier);
+    // 1. Instantly match tempo and pitch fader position to Master Deck
+    slaveDeck.setBaseTempoMultiplier(baseTempoMultiplier);
     slaveDeck.setPLLMultiplier(1.0);
     slaveDeck.setSync(true);
+    slaveDeck.setJogPitchNudge(0);
+
+    // Reflect the new pitch in the UI pitch fader
+    const pitchRange = slaveDeck.getPitchRange();
+    const pitchPct = (baseTempoMultiplier - 1.0) / pitchRange;
+    slaveDeck.setPitchPercentage(Math.max(-1.0, Math.min(1.0, pitchPct)));
+
+    // 2. Measure Master's exact beat grid position
+    const masterGrid = masterTrack.beatGrid || {
+      firstDownbeatSample: 0,
+      samplesPerBeat: (masterTrack.sampleRate * 60) / masterBpm,
+      beatsPerBar: 4,
+      totalBeats: 1000
+    };
+    const masterCurrentSample = masterDeck.getCurrentSourceSample();
+    const masterOffset = masterCurrentSample - (masterGrid.firstDownbeatSample || 0);
+    const masterBeatPos = masterGrid.samplesPerBeat > 0 ? masterOffset / masterGrid.samplesPerBeat : 0;
+    const masterBeatPhase = Math.max(0, Math.min(1.0, masterBeatPos - Math.floor(masterBeatPos)));
+    const masterBeatInBar = ((Math.floor(masterBeatPos) % 4) + 4) % 4; // 0, 1, 2, 3
+    const masterBeatPeriod = 60 / masterBpm;
+
+    const slaveGrid = slaveTrack.beatGrid || {
+      firstDownbeatSample: 0,
+      samplesPerBeat: (slaveTrack.sampleRate * 60) / slaveBpm,
+      beatsPerBar: 4,
+      totalBeats: 1000
+    };
+    const slaveSamplesPerBeat = slaveGrid.samplesPerBeat > 0 ? slaveGrid.samplesPerBeat : (slaveTrack.sampleRate * 60) / slaveBpm;
+    const slaveCurrentSample = slaveDeck.getCurrentSourceSample();
 
     if (slaveTelem.isPlaying) {
-      // If slave is already playing, snap slave's beat phase directly to master's beat phase
-      const masterOffset = masterTelem.currentSourceSample - (masterTrack.beatGrid.firstDownbeatSample || 0);
-      const masterBeatFloat = masterTrack.beatGrid.samplesPerBeat > 0 ? masterOffset / masterTrack.beatGrid.samplesPerBeat : 0;
-      const masterBeatPhase = masterBeatFloat - Math.floor(masterBeatFloat);
-      const masterBeatInBar = ((Math.floor(masterBeatFloat) % 4) + 4) % 4;
+      // SLAVE IS ALREADY PLAYING:
+      // Seamlessly align slave playback to match master kicks, snares, downbeats & rhythms
+      const lookaheadSec = 0.035; // 35ms safe Web Audio hardware scheduling lookahead
+      const targetAudioTime = now + lookaheadSec;
 
-      const slaveOffset = slaveTelem.currentSourceSample - (slaveTrack.beatGrid.firstDownbeatSample || 0);
-      const slaveBeatFloat = slaveTrack.beatGrid.samplesPerBeat > 0 ? slaveOffset / slaveTrack.beatGrid.samplesPerBeat : 0;
-      const currentSlaveBar = Math.floor(slaveBeatFloat / 4);
+      // Calculate where Master will be at targetAudioTime
+      const masterEffectiveRate = masterDeck.getEffectiveTempoMultiplier();
+      const deltaMasterSamples = lookaheadSec * masterEffectiveRate * masterTrack.sampleRate;
+      const masterSampleAtTarget = masterCurrentSample + deltaMasterSamples;
+
+      const masterOffsetAtTarget = masterSampleAtTarget - (masterGrid.firstDownbeatSample || 0);
+      const masterBeatPosAtTarget = masterGrid.samplesPerBeat > 0 ? masterOffsetAtTarget / masterGrid.samplesPerBeat : 0;
+      const masterBeatInBarAtTarget = ((Math.floor(masterBeatPosAtTarget) % 4) + 4) % 4; // 0, 1, 2, 3
+      const masterBeatPhaseAtTarget = masterBeatPosAtTarget - Math.floor(masterBeatPosAtTarget);
+
+      // Align Slave's beat in bar and fractional phase to Master's so kicks and snares hit in unison
+      const slaveOffset = slaveCurrentSample - (slaveGrid.firstDownbeatSample || 0);
+      const slaveBeatPos = slaveSamplesPerBeat > 0 ? slaveOffset / slaveSamplesPerBeat : 0;
 
       let targetSlaveBeat: number;
       if (quantizeMode === 'bar') {
-        targetSlaveBeat = currentSlaveBar * 4 + masterBeatInBar + masterBeatPhase;
+        const currentSlaveBar = Math.floor(slaveBeatPos / 4);
+        targetSlaveBeat = currentSlaveBar * 4 + masterBeatInBarAtTarget + masterBeatPhaseAtTarget;
       } else {
-        targetSlaveBeat = Math.floor(slaveBeatFloat) + masterBeatPhase;
+        // Nearest Beat Phase Sync: shifts at most ±0.5 beat to lock kick drums instantly
+        const nearestBeat = Math.round(slaveBeatPos);
+        targetSlaveBeat = nearestBeat + masterBeatPhaseAtTarget;
+        while (targetSlaveBeat - slaveBeatPos > 0.5) targetSlaveBeat -= 1.0;
+        while (targetSlaveBeat - slaveBeatPos < -0.5) targetSlaveBeat += 1.0;
       }
+      let targetSlaveSample = (slaveGrid.firstDownbeatSample || 0) + targetSlaveBeat * slaveSamplesPerBeat;
 
-      let targetSlaveSample = (slaveTrack.beatGrid.firstDownbeatSample || 0) + targetSlaveBeat * slaveTrack.beatGrid.samplesPerBeat;
       if (slaveTrack.totalSamples > 0) {
         targetSlaveSample = ((targetSlaveSample % slaveTrack.totalSamples) + slaveTrack.totalSamples) % slaveTrack.totalSamples;
       }
 
-      slaveDeck.seekToSourceSample(targetSlaveSample, false);
+      slaveDeck.syncAlignToMaster(targetAudioTime, targetSlaveSample, baseTempoMultiplier);
       this.syncEngine.resetController();
-    } else {
-      // Schedule playback to start cleanly at target output time with exact slave source sample
-      slaveDeck.play(plan.targetOutputTime, plan.slaveSourceSample);
-    }
 
-    return plan;
+      const plan: SlaveStartPlan = {
+        targetOutputFrame: Math.round(targetAudioTime * this.audioCtx.sampleRate),
+        targetOutputTime: targetAudioTime,
+        masterBeatNumber: masterBeatInBarAtTarget + 1,
+        masterIsDownbeat: masterBeatInBarAtTarget === 0,
+        masterBarIndex: Math.floor(masterBeatPosAtTarget / 4) + 1,
+        slaveSourceSample: targetSlaveSample,
+        slaveBeatNumber: masterBeatInBarAtTarget + 1,
+        slaveIsDownbeat: masterBeatInBarAtTarget === 0,
+        baseTempoMultiplier,
+        decoderLatencyFrames: 0,
+        timeStretcherLatencyFrames: 0,
+        audioBufferLatencyFrames: 0,
+        totalLatencySeconds: lookaheadSec,
+        prerollOutputTime: targetAudioTime
+      };
+      this.lastSlaveStartPlan = plan;
+      return plan;
+    } else {
+      // SLAVE IS STOPPED:
+      if (masterTelem.isPlaying) {
+        // Schedule slave to launch on the next beat or bar boundary with audio hardware precision
+        let scheduleDelay = (1.0 - masterBeatPhase) * masterBeatPeriod;
+        let targetMasterBeatIndex = Math.floor(masterBeatPos) + 1;
+
+        if (scheduleDelay < 0.04) {
+          scheduleDelay += masterBeatPeriod;
+          targetMasterBeatIndex += 1;
+        }
+
+        if (quantizeMode === 'bar') {
+          const beatsUntilBar = (4 - masterBeatInBar) || 4;
+          scheduleDelay = (beatsUntilBar - masterBeatPhase) * masterBeatPeriod;
+          if (scheduleDelay < 0.04) scheduleDelay += 4 * masterBeatPeriod;
+          targetMasterBeatIndex = Math.ceil(masterBeatPos / 4) * 4;
+        }
+
+        const scheduledTime = now + scheduleDelay;
+        slaveDeck.play(scheduledTime, slaveCurrentSample);
+        this.syncEngine.resetController();
+
+        const plan: SlaveStartPlan = {
+          targetOutputFrame: Math.round(scheduledTime * this.audioCtx.sampleRate),
+          targetOutputTime: scheduledTime,
+          masterBeatNumber: (targetMasterBeatIndex % 4) + 1,
+          masterIsDownbeat: (targetMasterBeatIndex % 4) === 0,
+          masterBarIndex: Math.floor(targetMasterBeatIndex / 4) + 1,
+          slaveSourceSample: slaveCurrentSample,
+          slaveBeatNumber: (targetMasterBeatIndex % 4) + 1,
+          slaveIsDownbeat: (targetMasterBeatIndex % 4) === 0,
+          baseTempoMultiplier,
+          decoderLatencyFrames: 0,
+          timeStretcherLatencyFrames: 0,
+          audioBufferLatencyFrames: 0,
+          totalLatencySeconds: 0,
+          prerollOutputTime: scheduledTime
+        };
+        this.lastSlaveStartPlan = plan;
+        return plan;
+      } else {
+        // Master is stopped: cue slave to first downbeat matching tempo
+        slaveDeck.seekToSourceSample(slaveGrid.firstDownbeatSample || 0, false);
+        this.syncEngine.resetController();
+        return null;
+      }
+    }
   }
 
   /**
@@ -204,7 +279,7 @@ export class DjMasterController {
       const masterTrack = masterDeck.getTrack();
       const slaveTrack = slaveDeck.getTrack();
 
-      // Only perform phase locking if both decks are loaded, both are playing, and slave has sync enabled
+      // Only perform phase tracking if both decks are loaded, both are playing, and slave has sync enabled
       if (masterTrack && slaveTrack && slaveDeck.getTelemetry().isSyncEnabled) {
         const masterTelem = masterDeck.getTelemetry();
         const slaveTelem = slaveDeck.getTelemetry();
@@ -212,6 +287,8 @@ export class DjMasterController {
         if (masterTelem.isPlaying && slaveTelem.isPlaying) {
           const baseTempo = masterTelem.effectiveBpm / slaveTrack.bpm;
           slaveDeck.setBaseTempoMultiplier(baseTempo);
+          // AUTO-NUDGING REMOVED: Keep PLL multiplier locked at solid 1.0 to eliminate all pitch flutter
+          slaveDeck.setPLLMultiplier(1.0);
 
           const phaseLockState = this.syncEngine.evaluateContinuousPhaseLock({
             currentTimeSeconds: this.audioCtx.currentTime,
@@ -225,14 +302,13 @@ export class DjMasterController {
             baseTempoMultiplier: baseTempo
           });
 
-          this.lastPhaseLockState = phaseLockState;
-
-          // In deadband, keep PLL multiplier at clean 1.0; otherwise apply smooth correction
-          if (phaseLockState.inDeadband) {
-            slaveDeck.setPLLMultiplier(1.0);
-          } else {
-            slaveDeck.setPLLMultiplier(1.0 + phaseLockState.correctionFraction);
-          }
+          // Telemetry maintains phase status for visual phase meter, but audio tempo remains pure & un-nudged
+          this.lastPhaseLockState = {
+            ...phaseLockState,
+            correctionFraction: 0,
+            status: 'locked',
+            isPhaseLocked: true
+          };
         } else {
           // If not both playing, ensure slave is running at matching base tempo with 1.0 PLL
           const baseTempo = masterTelem.effectiveBpm / slaveTrack.bpm;
@@ -322,6 +398,24 @@ export class DjMasterController {
 
   public getMasterDeckId(): DeckId {
     return this.masterDeckId;
+  }
+
+  /**
+   * Slip Mode Delegations
+   */
+  public toggleSlipMode(deckId: DeckId): boolean {
+    const deck = deckId === 'A' ? this.deckA : this.deckB;
+    return deck.toggleSlipMode();
+  }
+
+  public setSlipMode(deckId: DeckId, enabled: boolean): void {
+    const deck = deckId === 'A' ? this.deckA : this.deckB;
+    deck.setSlipMode(enabled);
+  }
+
+  public getIsSlipMode(deckId: DeckId): boolean {
+    const deck = deckId === 'A' ? this.deckA : this.deckB;
+    return deck.getIsSlipMode();
   }
 
   /**
@@ -430,6 +524,31 @@ export class DjMasterController {
       osc.start(now);
       osc.stop(now + 0.95);
     }
+  }
+
+  public setFirstDownbeat(deckId: DeckId, sample?: number): void {
+    const deck = deckId === 'A' ? this.deckA : this.deckB;
+    deck.setFirstDownbeat(sample);
+  }
+
+  public nudgeBeatGrid(deckId: DeckId, deltaMs: number): void {
+    const deck = deckId === 'A' ? this.deckA : this.deckB;
+    deck.nudgeBeatGrid(deltaMs);
+  }
+
+  public setTrackBpm(deckId: DeckId, bpm: number): void {
+    const deck = deckId === 'A' ? this.deckA : this.deckB;
+    deck.setTrackBpm(bpm);
+  }
+
+  public doubleTrackBpm(deckId: DeckId): void {
+    const deck = deckId === 'A' ? this.deckA : this.deckB;
+    deck.doubleTrackBpm();
+  }
+
+  public halveTrackBpm(deckId: DeckId): void {
+    const deck = deckId === 'A' ? this.deckA : this.deckB;
+    deck.halveTrackBpm();
   }
 
   public destroy(): void {

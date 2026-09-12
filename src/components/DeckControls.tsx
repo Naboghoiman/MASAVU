@@ -20,6 +20,7 @@ interface DeckControlsProps {
   onCueUp: () => void;
   onSyncToggle: () => void;
   onMasterToggle: () => void;
+  onSlipToggle?: () => void;
   onPitchChange: (val: number) => void;
   onKeyLockToggle: () => void;
   onTriggerHotCue: (id: number) => void;
@@ -44,6 +45,7 @@ export const DeckControls: React.FC<DeckControlsProps> = ({
   onCueUp,
   onSyncToggle,
   onMasterToggle,
+  onSlipToggle,
   onPitchChange,
   onKeyLockToggle,
   onTriggerHotCue,
@@ -178,8 +180,8 @@ export const DeckControls: React.FC<DeckControlsProps> = ({
         </div>
       </div>
 
-      {/* Primary Transport Controls: CUE, PLAY, SYNC, MASTER */}
-      <div className="grid grid-cols-4 gap-2">
+      {/* Primary Transport Controls: CUE, PLAY, SYNC, MASTER, SLIP */}
+      <div className="grid grid-cols-5 gap-1.5">
         {/* CUE Button */}
         <button
           id={`deck-${telemetry.deckId}-cue-btn`}
@@ -234,6 +236,21 @@ export const DeckControls: React.FC<DeckControlsProps> = ({
         >
           <span>MASTER</span>
           <span className="text-[9px] font-mono">{telemetry.isMaster ? 'LEAD' : 'ASSIGN'}</span>
+        </button>
+
+        {/* SLIP Button */}
+        <button
+          id={`deck-${telemetry.deckId}-slip-btn`}
+          onClick={onSlipToggle}
+          title="Slip Mode: touching wave or scratching does not alter rhythm"
+          className={`h-13 border-2 rounded-lg font-black text-sm flex flex-col items-center justify-center transition-all shadow-md active:scale-95 ${
+            telemetry.isSlipMode
+              ? 'bg-amber-500 text-slate-950 border-amber-300 shadow-[0_0_14px_rgba(245,158,11,0.8)] animate-pulse'
+              : 'bg-slate-800 text-amber-400 border-amber-600/60 hover:bg-amber-950/40'
+          }`}
+        >
+          <span>SLIP</span>
+          <span className="text-[9px] font-mono">{telemetry.isSlipping ? 'SLIPPING' : telemetry.isSlipMode ? 'ON' : 'OFF'}</span>
         </button>
       </div>
 

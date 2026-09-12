@@ -118,6 +118,10 @@ export interface ContinuousPhaseLockState {
   correctedTempoMultiplier: number;
   /** Current synchronization status */
   status: 'locked' | 'deadband' | 'correcting' | 'reanchoring' | 'idle';
+  /** Whether phase is actively locked or in deadband */
+  isPhaseLocked?: boolean;
+  /** Instantaneous phase error in milliseconds */
+  instantaneousPhaseErrorMs?: number;
   /** Cumulative count of transport discontinuities / seeks */
   transportDiscontinuities: number;
   /** Monitor for buffer / rounding drift in output frames */
@@ -260,6 +264,14 @@ export interface DeckTelemetry {
   beatPhase: number;
   /** Volume level meter (left & right 0..1) */
   vuLevel: [number, number];
+  /** Whether Slip Mode is active on this deck */
+  isSlipMode: boolean;
+  /** Whether the user is actively touching / scrubbing / slipping the wave */
+  isSlipping: boolean;
+  /** Virtual background playhead source sample coordinate */
+  slipSourceSample: number;
+  /** Virtual background playhead time in seconds */
+  slipTimeSeconds: number;
   /** Whether straight-BPM PCM audio preparation is active */
   isStraightened?: boolean;
   /** Warp and transient protection telemetry */

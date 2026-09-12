@@ -26,11 +26,13 @@ interface DjHardwareControllerProps {
   onCueDownA: () => void;
   onCueUpA: () => void;
   onSyncA: () => void;
+  onToggleSlipA?: () => void;
   onPlayB: () => void;
   onPauseB: () => void;
   onCueDownB: () => void;
   onCueUpB: () => void;
   onSyncB: () => void;
+  onToggleSlipB?: () => void;
   // Mixer & EQs
   lowEqA: number;
   midEqA: number;
@@ -74,11 +76,13 @@ export const DjHardwareController: React.FC<DjHardwareControllerProps> = ({
   onCueDownA,
   onCueUpA,
   onSyncA,
+  onToggleSlipA,
   onPlayB,
   onPauseB,
   onCueDownB,
   onCueUpB,
   onSyncB,
+  onToggleSlipB,
   lowEqA,
   midEqA,
   highEqA,
@@ -262,20 +266,34 @@ export const DjHardwareController: React.FC<DjHardwareControllerProps> = ({
             </div>
           </div>
 
-          {/* Deck A Right: SYNC Button, HI, TRIM, MID, LOW */}
+          {/* Deck A Right: SYNC & SLIP Buttons, HI, TRIM, MID, LOW */}
           <div className="flex flex-col items-center justify-between gap-2.5">
-            {/* Glowing Blue SYNC Button */}
-            <button
-              id="deck-a-hw-sync-btn"
-              onClick={onSyncA}
-              className={`w-full py-1.5 rounded-lg text-xs font-black font-mono tracking-widest uppercase transition-all active:scale-95 ${
-                telemetryA?.isSyncEnabled
-                  ? 'bg-sky-500 text-black border-2 border-sky-300 shadow-[0_0_16px_rgba(56,189,248,0.9)] animate-pulse'
-                  : 'bg-[#0E1B2E] text-sky-400 border-2 border-sky-500 hover:bg-sky-950/80 shadow-[0_0_10px_rgba(14,165,233,0.4)]'
-              }`}
-            >
-              SYNC
-            </button>
+            {/* SYNC & SLIP Button Pair */}
+            <div className="grid grid-cols-2 gap-1.5 w-full">
+              <button
+                id="deck-a-hw-sync-btn"
+                onClick={onSyncA}
+                className={`py-1.5 rounded-lg text-[11px] font-black font-mono tracking-wider uppercase transition-all active:scale-95 ${
+                  telemetryA?.isSyncEnabled
+                    ? 'bg-sky-500 text-black border-2 border-sky-300 shadow-[0_0_16px_rgba(56,189,248,0.9)] animate-pulse'
+                    : 'bg-[#0E1B2E] text-sky-400 border-2 border-sky-500 hover:bg-sky-950/80 shadow-[0_0_10px_rgba(14,165,233,0.4)]'
+                }`}
+              >
+                SYNC
+              </button>
+              <button
+                id="deck-a-hw-slip-btn"
+                onClick={onToggleSlipA}
+                className={`py-1.5 rounded-lg text-[11px] font-black font-mono tracking-wider uppercase transition-all active:scale-95 ${
+                  telemetryA?.isSlipMode
+                    ? 'bg-amber-500 text-black border-2 border-amber-300 shadow-[0_0_16px_rgba(245,158,11,0.9)] animate-pulse'
+                    : 'bg-[#18140B] text-amber-400 border-2 border-amber-600/60 hover:bg-amber-950/80 shadow-[0_0_8px_rgba(245,158,11,0.25)]'
+                }`}
+                title="Slip Mode: touching wave or scratching does not alter rhythm"
+              >
+                SLIP
+              </button>
+            </div>
 
             {/* HI Knob */}
             <DjHardwareKnob
@@ -415,20 +433,34 @@ export const DjHardwareController: React.FC<DjHardwareControllerProps> = ({
         {/* DECK B CHANNEL STRIP (Right 5 Cols)                          */}
         {/* ------------------------------------------------------------- */}
         <div className="col-span-5 grid grid-cols-2 gap-3 bg-[#0B0D12] p-3 rounded-lg border border-[#1C202C]">
-          {/* Deck B Left: HI, TRIM, MID, LOW */}
+          {/* Deck B Left: SYNC & SLIP Buttons, HI, TRIM, MID, LOW */}
           <div className="flex flex-col items-center justify-between gap-2.5">
-            {/* Glowing Blue SYNC Button */}
-            <button
-              id="deck-b-hw-sync-btn"
-              onClick={onSyncB}
-              className={`w-full py-1.5 rounded-lg text-xs font-black font-mono tracking-widest uppercase transition-all active:scale-95 ${
-                telemetryB?.isSyncEnabled
-                  ? 'bg-sky-500 text-black border-2 border-sky-300 shadow-[0_0_16px_rgba(56,189,248,0.9)] animate-pulse'
-                  : 'bg-[#0E1B2E] text-sky-400 border-2 border-sky-500 hover:bg-sky-950/80 shadow-[0_0_10px_rgba(14,165,233,0.4)]'
-              }`}
-            >
-              SYNC
-            </button>
+            {/* SYNC & SLIP Button Pair */}
+            <div className="grid grid-cols-2 gap-1.5 w-full">
+              <button
+                id="deck-b-hw-sync-btn"
+                onClick={onSyncB}
+                className={`py-1.5 rounded-lg text-[11px] font-black font-mono tracking-wider uppercase transition-all active:scale-95 ${
+                  telemetryB?.isSyncEnabled
+                    ? 'bg-sky-500 text-black border-2 border-sky-300 shadow-[0_0_16px_rgba(56,189,248,0.9)] animate-pulse'
+                    : 'bg-[#0E1B2E] text-sky-400 border-2 border-sky-500 hover:bg-sky-950/80 shadow-[0_0_10px_rgba(14,165,233,0.4)]'
+                }`}
+              >
+                SYNC
+              </button>
+              <button
+                id="deck-b-hw-slip-btn"
+                onClick={onToggleSlipB}
+                className={`py-1.5 rounded-lg text-[11px] font-black font-mono tracking-wider uppercase transition-all active:scale-95 ${
+                  telemetryB?.isSlipMode
+                    ? 'bg-amber-500 text-black border-2 border-amber-300 shadow-[0_0_16px_rgba(245,158,11,0.9)] animate-pulse'
+                    : 'bg-[#18140B] text-amber-400 border-2 border-amber-600/60 hover:bg-amber-950/80 shadow-[0_0_8px_rgba(245,158,11,0.25)]'
+                }`}
+                title="Slip Mode: touching wave or scratching does not alter rhythm"
+              >
+                SLIP
+              </button>
+            </div>
 
             {/* HI Knob */}
             <DjHardwareKnob

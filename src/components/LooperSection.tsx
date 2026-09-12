@@ -579,7 +579,9 @@ export const LooperSection: React.FC<LooperSectionProps> = ({
                 <input
                   type="file"
                   accept="audio/*"
-                  ref={(el) => (fileInputRefs.current[index] = el)}
+                  ref={(el) => {
+                    fileInputRefs.current[index] = el;
+                  }}
                   className="hidden"
                   onChange={(e) => {
                     const file = e.target.files?.[0];

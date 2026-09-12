@@ -31,6 +31,19 @@ interface WaveformDisplayProps {
   onCueDeckB: () => void;
   onToggleLooper?: (deckId: 'A' | 'B') => void;
   onToggleHotCue?: (deckId: 'A' | 'B') => void;
+  onSetFirstDownbeatA?: () => void;
+  onNudgeBeatGridA?: (deltaMs: number) => void;
+  onSetFirstDownbeatB?: () => void;
+  onNudgeBeatGridB?: (deltaMs: number) => void;
+  onLoadTestPair?: () => void;
+  onToggleSlipDeckA?: () => void;
+  onToggleSlipDeckB?: () => void;
+  onSlipTouchStartA?: (sample: number) => void;
+  onSlipTouchMoveA?: (sample: number) => void;
+  onSlipTouchEndA?: () => void;
+  onSlipTouchStartB?: (sample: number) => void;
+  onSlipTouchMoveB?: (sample: number) => void;
+  onSlipTouchEndB?: () => void;
 }
 
 // 12-segment LED VU Meter
@@ -97,12 +110,26 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
   onPauseDeckB,
   onCueDeckB,
   onToggleLooper,
-  onToggleHotCue
+  onToggleHotCue,
+  onSetFirstDownbeatA,
+  onNudgeBeatGridA,
+  onSetFirstDownbeatB,
+  onNudgeBeatGridB,
+  onLoadTestPair,
+  onToggleSlipDeckA,
+  onToggleSlipDeckB,
+  onSlipTouchStartA,
+  onSlipTouchMoveA,
+  onSlipTouchEndA,
+  onSlipTouchStartB,
+  onSlipTouchMoveB,
+  onSlipTouchEndB
 }) => {
   const canvasRefA = useRef<HTMLCanvasElement | null>(null);
   const canvasRefB = useRef<HTMLCanvasElement | null>(null);
   const overviewRefA = useRef<HTMLCanvasElement | null>(null);
   const overviewRefB = useRef<HTMLCanvasElement | null>(null);
+  const activePointerDeckRef = useRef<'A' | 'B' | null>(null);
 
   // Store latest props for high-rate canvas renderer
   const propsRef = useRef({
@@ -179,24 +206,80 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
     return () => cancelAnimationFrame(animId);
   }, []);
 
-  // Handle Main Waveform Click & Drag Seeking
-  const handleMainWaveClick = (deck: 'A' | 'B', e: React.MouseEvent<HTMLCanvasElement>) => {
+  // Calculate source sample coordinate under mouse or finger
+  const calculateSampleFromClientX = (deck: 'A' | 'B', clientX: number): number | null => {
     const canvas = deck === 'A' ? canvasRefA.current : canvasRefB.current;
-    if (!canvas) return;
+    if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
+    const clickX = clientX - rect.left;
     const targetTrack = deck === 'A' ? trackA : trackB;
     const targetTelem = deck === 'A' ? telemetryA : telemetryB;
-    const onSeek = deck === 'A' ? onSeekDeckA : onSeekDeckB;
-
-    if (!targetTrack || !targetTrack.waveform) return;
+    if (!targetTrack || !targetTrack.waveform) return null;
 
     const samplesPerPixelZoom = targetTrack.waveform.samplesPerPixel * 1.5;
     const deltaPixels = clickX - rect.width / 2;
     const deltaSamples = deltaPixels * samplesPerPixelZoom;
-    const newSample = Math.max(0, Math.min(targetTrack.totalSamples, targetTelem.currentSourceSample + deltaSamples));
-    onSeek(newSample);
+    return Math.max(0, Math.min(targetTrack.totalSamples, targetTelem.currentSourceSample + deltaSamples));
   };
+
+  // Handle Main Waveform Touch / Pointer Down
+  const handleWavePointerDown = (deck: 'A' | 'B', clientX: number) => {
+    activePointerDeckRef.current = deck;
+    const targetSample = calculateSampleFromClientX(deck, clientX);
+    if (targetSample === null) return;
+
+    const targetTelem = deck === 'A' ? telemetryA : telemetryB;
+    if (targetTelem?.isSlipMode) {
+      if (deck === 'A') onSlipTouchStartA?.(targetSample);
+      else onSlipTouchStartB?.(targetSample);
+    } else {
+      if (deck === 'A') onSeekDeckA(targetSample);
+      else onSeekDeckB(targetSample);
+    }
+  };
+
+  // Handle Main Waveform Scrub / Drag
+  const handleWavePointerMove = (deck: 'A' | 'B', clientX: number) => {
+    if (activePointerDeckRef.current !== deck) return;
+    const targetSample = calculateSampleFromClientX(deck, clientX);
+    if (targetSample === null) return;
+
+    const targetTelem = deck === 'A' ? telemetryA : telemetryB;
+    if (targetTelem?.isSlipMode) {
+      if (deck === 'A') onSlipTouchMoveA?.(targetSample);
+      else onSlipTouchMoveB?.(targetSample);
+    } else {
+      if (deck === 'A') onSeekDeckA(targetSample);
+      else onSeekDeckB(targetSample);
+    }
+  };
+
+  // Handle Main Waveform Release (MouseUp / TouchEnd)
+  const handleWavePointerUp = (deck: 'A' | 'B') => {
+    if (activePointerDeckRef.current === deck) {
+      activePointerDeckRef.current = null;
+      const targetTelem = deck === 'A' ? telemetryA : telemetryB;
+      if (targetTelem?.isSlipMode) {
+        if (deck === 'A') onSlipTouchEndA?.();
+        else onSlipTouchEndB?.();
+      }
+    }
+  };
+
+  // Window listener to catch drag releases that end outside the canvas
+  useEffect(() => {
+    const handleGlobalRelease = () => {
+      if (activePointerDeckRef.current) {
+        handleWavePointerUp(activePointerDeckRef.current);
+      }
+    };
+    window.addEventListener('pointerup', handleGlobalRelease);
+    window.addEventListener('touchend', handleGlobalRelease);
+    return () => {
+      window.removeEventListener('pointerup', handleGlobalRelease);
+      window.removeEventListener('touchend', handleGlobalRelease);
+    };
+  }, []);
 
   // Handle Mini Overview Click
   const handleOverviewClick = (deck: 'A' | 'B', e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -309,6 +392,20 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
               {telemetryA?.isPlaying ? <Pause className="w-3 h-3 fill-current" /> : <Play className="w-3 h-3 fill-current ml-0.5" />}
             </button>
 
+            {/* SLIP Mode Toggle Button */}
+            <button
+              id="deck-a-quick-slip"
+              onClick={onToggleSlipDeckA}
+              title="Slip Mode: touching/scratching wave does not alter rhythm"
+              className={`px-2 sm:px-2.5 py-0.5 sm:py-1 rounded text-[10px] sm:text-[11px] font-black font-mono uppercase transition-all active:scale-95 ${
+                telemetryA?.isSlipMode
+                  ? 'bg-amber-500 text-black font-black border border-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.85)]'
+                  : 'bg-slate-800/90 hover:bg-slate-700 text-slate-400 border border-slate-700'
+              }`}
+            >
+              SLIP
+            </button>
+
             <button
               onClick={() => onToggleLooper?.('A')}
               className="px-1.5 sm:px-2 py-0.5 sm:py-1 rounded text-[9px] sm:text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
@@ -336,28 +433,58 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
       {/* ========================================================================= */}
       {/* 2. DUAL STACKED MAIN WAVEFORMS (CLOSE TO EACH OTHER, ZERO GAP)            */}
       {/* ========================================================================= */}
-      <div className="relative w-full bg-[#05070B] border border-[#161B29] overflow-hidden shadow-inner">
+      <div className="relative w-full bg-[#05070B] border border-[#161B29] overflow-hidden shadow-inner select-none">
+        {/* Slip Mode Active Notification Pill */}
+        {(telemetryA?.isSlipping || telemetryB?.isSlipping) && (
+          <div className="absolute top-2 right-4 px-2.5 py-1 rounded-full bg-amber-500/90 text-black text-[10px] font-black font-mono tracking-wider uppercase z-30 shadow-[0_0_14px_rgba(245,158,11,0.9)] animate-pulse flex items-center gap-1.5 pointer-events-none">
+            <span className="w-2 h-2 rounded-full bg-black animate-ping" />
+            <span>SLIP ACTIVE • RHYTHM PROTECTED</span>
+          </div>
+        )}
+
         {/* Deck A Main Waveform (Top) */}
-        <div className="relative w-full h-16 sm:h-20 border-b border-slate-800/80 cursor-crosshair">
+        <div className="relative w-full h-16 sm:h-20 border-b border-slate-800/80 cursor-grab active:cursor-grabbing touch-none">
           <canvas
             ref={canvasRefA}
-            onClick={(e) => handleMainWaveClick('A', e)}
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture?.(e.pointerId);
+              handleWavePointerDown('A', e.clientX);
+            }}
+            onPointerMove={(e) => handleWavePointerMove('A', e.clientX)}
+            onPointerUp={(e) => {
+              try {
+                e.currentTarget.releasePointerCapture?.(e.pointerId);
+              } catch {}
+              handleWavePointerUp('A');
+            }}
+            onPointerCancel={() => handleWavePointerUp('A')}
             className="w-full h-full block"
           />
           <div className="absolute top-1.5 left-2 px-1.5 py-0.5 rounded bg-cyan-950/80 border border-cyan-500/40 text-[9px] font-mono font-bold text-cyan-300 pointer-events-none z-10">
-            DECK A
+            DECK A {telemetryA?.isSlipMode ? '• SLIP ON' : ''}
           </div>
         </div>
 
         {/* Deck B Main Waveform (Bottom) - IMMEDIATELY ADJACENT */}
-        <div className="relative w-full h-16 sm:h-20 cursor-crosshair">
+        <div className="relative w-full h-16 sm:h-20 cursor-grab active:cursor-grabbing touch-none">
           <canvas
             ref={canvasRefB}
-            onClick={(e) => handleMainWaveClick('B', e)}
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture?.(e.pointerId);
+              handleWavePointerDown('B', e.clientX);
+            }}
+            onPointerMove={(e) => handleWavePointerMove('B', e.clientX)}
+            onPointerUp={(e) => {
+              try {
+                e.currentTarget.releasePointerCapture?.(e.pointerId);
+              } catch {}
+              handleWavePointerUp('B');
+            }}
+            onPointerCancel={() => handleWavePointerUp('B')}
             className="w-full h-full block"
           />
           <div className="absolute bottom-1.5 left-2 px-1.5 py-0.5 rounded bg-pink-950/80 border border-pink-500/40 text-[9px] font-mono font-bold text-pink-300 pointer-events-none z-10">
-            DECK B
+            DECK B {telemetryB?.isSlipMode ? '• SLIP ON' : ''}
           </div>
         </div>
 
@@ -463,6 +590,20 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
               {telemetryB?.isPlaying ? <Pause className="w-3 h-3 fill-current" /> : <Play className="w-3 h-3 fill-current ml-0.5" />}
             </button>
 
+            {/* SLIP Mode Toggle Button */}
+            <button
+              id="deck-b-quick-slip"
+              onClick={onToggleSlipDeckB}
+              title="Slip Mode: touching/scratching wave does not alter rhythm"
+              className={`px-2 sm:px-2.5 py-0.5 sm:py-1 rounded text-[10px] sm:text-[11px] font-black font-mono uppercase transition-all active:scale-95 ${
+                telemetryB?.isSlipMode
+                  ? 'bg-amber-500 text-black font-black border border-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.85)]'
+                  : 'bg-slate-800/90 hover:bg-slate-700 text-slate-400 border border-slate-700'
+              }`}
+            >
+              SLIP
+            </button>
+
             <button
               onClick={() => onToggleLooper?.('B')}
               className="px-1.5 sm:px-2 py-0.5 sm:py-1 rounded text-[9px] sm:text-[10px] font-bold font-mono text-slate-300 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition-colors uppercase"
@@ -484,6 +625,94 @@ export const WaveformDisplay: React.FC<WaveformDisplayProps> = ({
               HOT CUE
             </button>
           </div>
+        </div>
+      </div>
+
+      {/* 4. RHYTHMIC SYNCHRONISATION & BEATGRID CALIBRATION TOOLBAR */}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5 bg-[#0A0E18] rounded border border-slate-800 text-[11px] font-mono">
+        {/* Left: Deck A Calibration */}
+        <div className="flex items-center gap-1.5">
+          <span className="text-cyan-400 font-bold uppercase text-[10px]">DECK A GRID:</span>
+          <button
+            id="deck-a-set-downbeat-btn"
+            onClick={onSetFirstDownbeatA}
+            title="Lock Beat 1 (Downbeat) to current playhead"
+            className="px-2 py-0.5 rounded bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-500/50 text-cyan-300 font-bold active:scale-95 transition-all text-[10px]"
+          >
+            SET BEAT 1
+          </button>
+          <button
+            id="deck-a-nudge-prev-btn"
+            onClick={() => onNudgeBeatGridA?.(-5)}
+            title="Shift grid 5ms earlier"
+            className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 active:scale-95 text-[10px]"
+          >
+            ◀ 5ms
+          </button>
+          <button
+            id="deck-a-nudge-next-btn"
+            onClick={() => onNudgeBeatGridA?.(5)}
+            title="Shift grid 5ms later"
+            className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 active:scale-95 text-[10px]"
+          >
+            ▶ 5ms
+          </button>
+        </div>
+
+        {/* Center: Phase Deviation & Quick Load Test Pair */}
+        <div className="flex items-center gap-3">
+          {onLoadTestPair && (
+            <button
+              id="load-test-pair-btn"
+              onClick={onLoadTestPair}
+              className="px-2.5 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-300 font-bold flex items-center gap-1 active:scale-95 transition-all text-[10px] shadow-[0_0_8px_rgba(245,158,11,0.2)]"
+            >
+              <span>⚡️ LOAD TEST PAIR</span>
+              <span className="text-slate-400 text-[9px] hidden sm:inline">(103 BPM ↔ 91 BPM)</span>
+            </button>
+          )}
+
+          <div className="flex items-center gap-1 text-[10px]">
+            <span className="text-slate-500">PHASE OFFSET:</span>
+            <span
+              className={`font-bold px-1.5 py-0.2 rounded border ${
+                phaseLockState && (phaseLockState.isPhaseLocked || phaseLockState.status === 'locked' || phaseLockState.inDeadband || Math.abs(phaseLockState.phaseErrorMs ?? 0) < 3.0)
+                  ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300'
+                  : 'bg-slate-900 border-slate-700 text-slate-400'
+              }`}
+            >
+              {phaseLockState ? `${(phaseLockState.phaseErrorMs ?? phaseLockState.instantaneousPhaseErrorMs ?? 0).toFixed(1)} ms` : '±0.0 ms'}
+            </span>
+          </div>
+        </div>
+
+        {/* Right: Deck B Calibration */}
+        <div className="flex items-center gap-1.5">
+          <span className="text-pink-400 font-bold uppercase text-[10px]">DECK B GRID:</span>
+          <button
+            id="deck-b-set-downbeat-btn"
+            onClick={onSetFirstDownbeatB}
+            title="Lock Beat 1 (Downbeat) to current playhead"
+            className="px-2 py-0.5 rounded bg-pink-950/80 hover:bg-pink-900 border border-pink-500/50 text-pink-300 font-bold active:scale-95 transition-all text-[10px]"
+          >
+            SET BEAT 1
+          </button>
+          <button
+            id="deck-b-nudge-prev-btn"
+            onClick={() => onNudgeBeatGridB?.(-5)}
+            title="Shift grid 5ms earlier"
+            className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 active:scale-95 text-[10px]"
+          >
+            ◀ 5ms
+          </button>
+          <button
+            id="deck-b-nudge-next-btn"
+            onClick={() => onNudgeBeatGridB?.(5)}
+            title="Shift grid 5ms later"
+            className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 active:scale-95 text-[10px]"
+          >
+            ▶ 5ms
+          </button>
         </div>
       </div>
     </div>
@@ -631,6 +860,62 @@ function drawMainWaveform(
     ctx.stroke();
   }
 
+  // 3. Draw Ghost Slip Playhead when Slip Mode is actively slipping
+  if (telemetry?.isSlipping && Number.isFinite(telemetry.slipSourceSample)) {
+    const slipX = playheadX + (telemetry.slipSourceSample - currentSample) / samplesPerPixelZoom;
+
+    if (slipX >= 0 && slipX <= width) {
+      // High-visibility glowing amber line for the virtual background playhead
+      ctx.save();
+      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = '#F59E0B';
+      ctx.lineWidth = 2.5;
+      ctx.shadowColor = '#FBBF24';
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.moveTo(slipX, 0);
+      ctx.lineTo(slipX, height);
+      ctx.stroke();
+
+      // Top flag badge: SLIP SNAP
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#F59E0B';
+      ctx.beginPath();
+      if (typeof (ctx as any).roundRect === 'function') {
+        (ctx as any).roundRect(slipX - 24, 1, 48, 14, 3);
+      } else {
+        ctx.rect(slipX - 24, 1, 48, 14);
+      }
+      ctx.fill();
+      ctx.fillStyle = '#000000';
+      ctx.font = 'bold 8px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('SLIP SNAP', slipX, 8);
+
+      // Bottom triangle indicator pointing up
+      ctx.fillStyle = '#F59E0B';
+      ctx.beginPath();
+      ctx.moveTo(slipX - 5, height - 1);
+      ctx.lineTo(slipX + 5, height - 1);
+      ctx.lineTo(slipX, height - 8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    } else {
+      // Offscreen indicators on left or right edge
+      const isRight = slipX > width;
+      const indicatorX = isRight ? width - 26 : 26;
+      ctx.save();
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.9)';
+      ctx.font = 'bold 8px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(isRight ? 'SLIP ▶' : '◀ SLIP', indicatorX, height / 2);
+      ctx.restore();
+    }
+  }
+
   ctx.globalAlpha = 1.0;
   ctx.restore();
 }
@@ -694,6 +979,13 @@ function drawOverviewWaveform(
 
   ctx.fillStyle = '#FFFFFF';
   ctx.fillRect(playheadX - 1, 0, 2, height);
+
+  // If currently slipping, draw background virtual slip playhead in glowing amber
+  if (telemetry?.isSlipping && Number.isFinite(telemetry.slipSourceSample)) {
+    const slipX = (telemetry.slipSourceSample / totalSamples) * width;
+    ctx.fillStyle = '#F59E0B';
+    ctx.fillRect(slipX - 1, 0, 2, height);
+  }
 
   // Cue flags in overview
   ctx.fillStyle = cueColor;

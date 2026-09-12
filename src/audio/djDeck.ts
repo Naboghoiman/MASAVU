@@ -15,6 +15,7 @@ import {
   TrackData
 } from '../types/dj';
 import { prepareStraightBpmTrack } from './audioWarpEngine';
+import { buildSourceBeatGrid } from './trackGenerator';
 
 export class DjDeck {
   public readonly deckId: DeckId;
@@ -73,6 +74,14 @@ export class DjDeck {
   // Jog wheel & scratch states
   private isJogTouching = false;
   private jogPitchNudge = 0; // temporary pitch nudge while spinning/nudging rim
+
+  // Slip Mode (Professional CDJ / Serato standard: touching the wave does not alter rhythm)
+  private isSlipMode: boolean = true;
+  private isSlipping: boolean = false;
+  private slipAnchorTime: number = 0;
+  private slipAnchorSample: number = 0;
+  private wasPlayingWhenSlipped: boolean = false;
+  private slipEffectiveTempo: number = 1.0;
 
   // Level metering
   private vuDataArray: Uint8Array;
@@ -251,7 +260,11 @@ export class DjDeck {
     const range = Number.isFinite(this.pitchRange) ? this.pitchRange : 0.16;
     const manualPitchMultiplier = 1.0 + (pitch * range);
     const nudge = Number.isFinite(this.jogPitchNudge) ? this.jogPitchNudge : 0;
-    const effective = base * pll * manualPitchMultiplier * (1.0 + nudge);
+
+    // When sync is enabled, baseTempoMultiplier already matches master deck's effective BPM.
+    // If not synced, manualPitchMultiplier adjusts tempo.
+    const tempo = this.isSyncEnabled ? (base * pll) : (base * manualPitchMultiplier * pll);
+    const effective = tempo * (1.0 + nudge);
     return Math.max(0.1, Math.min(4.0, Number.isFinite(effective) ? effective : 1.0));
   }
 
@@ -322,8 +335,18 @@ export class DjDeck {
     }
 
     // Source offset in seconds within the audio buffer
-    const offsetSeconds = clampedSample / this.track.sampleRate;
-    this.sourceNode.start(scheduledTime, offsetSeconds);
+    const bufferDuration = this.track.audioBuffer.duration;
+    const safeOffsetSeconds = Math.max(0, Math.min(Math.max(0, bufferDuration - 0.05), clampedSample / this.track.sampleRate));
+    try {
+      this.sourceNode.start(scheduledTime, safeOffsetSeconds);
+    } catch (err) {
+      console.warn('sourceNode.start fallback:', err);
+      try {
+        this.sourceNode.start(scheduledTime, 0);
+      } catch {
+        // Safe ignore
+      }
+    }
 
     this.isPlaying = true;
   }
@@ -422,6 +445,81 @@ export class DjDeck {
       this.anchorTime = this.audioCtx.currentTime;
       this.scheduledStartTime = 0;
       this.updateMappingAnchor(clampedSample);
+    }
+  }
+
+  /**
+   * Sample-accurate, click-free sync alignment to Master Deck.
+   * Seamlessly transitions the slave playback so its kicks, snares, downbeats,
+   * and rhythmic groove lock perfectly with the master track.
+   */
+  public syncAlignToMaster(targetAudioTime: number, targetSourceSample: number, tempoMultiplier: number): void {
+    if (!this.track || !this.track.audioBuffer) return;
+
+    const clampedSample = Math.max(0, Math.min(this.track.totalSamples - 100, Math.round(targetSourceSample)));
+    const offsetSeconds = clampedSample / this.track.sampleRate;
+    const now = this.audioCtx.currentTime;
+    const scheduleTime = Math.max(now, targetAudioTime);
+
+    this.baseTempoMultiplier = tempoMultiplier;
+    this.pllTempoMultiplier = 1.0;
+    this.isSyncEnabled = true;
+
+    if (this.isPlaying && this.sourceNode) {
+      // Create new buffer source configured for the aligned stream
+      const newSource = this.audioCtx.createBufferSource();
+      newSource.buffer = this.track.audioBuffer;
+      newSource.playbackRate.value = tempoMultiplier;
+      newSource.loop = true;
+
+      if (this.loop.isActive && this.loop.endSourceSample > this.loop.startSourceSample) {
+        newSource.loopStart = this.loop.startSourceSample / this.track.sampleRate;
+        newSource.loopEnd = this.loop.endSourceSample / this.track.sampleRate;
+      } else {
+        newSource.loopStart = 0;
+        newSource.loopEnd = this.track.totalSamples / this.track.sampleRate;
+      }
+
+      newSource.connect(this.crossfadeGainNode);
+
+      // Start new source at exact scheduled audio clock time
+      const bufferDuration = this.track.audioBuffer.duration;
+      const safeOffset = Math.max(0, Math.min(Math.max(0, bufferDuration - 0.05), offsetSeconds));
+      try {
+        newSource.start(scheduleTime, safeOffset);
+      } catch (err) {
+        console.warn('syncAlignToMaster newSource.start fallback:', err);
+        try {
+          newSource.start(scheduleTime, 0);
+        } catch {
+          // Safe ignore
+        }
+      }
+
+      // Cleanly retire previous source
+      const oldSource = this.sourceNode;
+      try {
+        oldSource.stop(scheduleTime + 0.003);
+        setTimeout(() => {
+          try {
+            oldSource.disconnect();
+          } catch {
+            // Safe ignore
+          }
+        }, 30);
+      } catch {
+        // Safe ignore
+      }
+
+      this.sourceNode = newSource;
+      this.currentSourceSample = clampedSample;
+      this.anchorSourceSample = clampedSample;
+      this.anchorTime = scheduleTime;
+      this.scheduledStartTime = 0;
+      this.appliedPlaybackRate = tempoMultiplier;
+      this.updateMappingAnchor(clampedSample);
+    } else {
+      this.play(scheduleTime, clampedSample);
     }
   }
 
@@ -537,12 +635,25 @@ export class DjDeck {
     this.updateLivePlaybackRate();
   }
 
+  public getPitchRange(): number {
+    return this.pitchRange;
+  }
+
+  public getCurrentSourceSample(): number {
+    return this.currentSourceSample;
+  }
+
+  public setJogPitchNudge(nudge: number): void {
+    this.jogPitchNudge = nudge;
+    this.updateLivePlaybackRate();
+  }
+
   /**
    * Continuous PLL phase lock update from DjSyncEngine
    */
   public setPLLMultiplier(multiplier: number): void {
     const safeMultiplier = Number.isFinite(multiplier) && multiplier > 0.5 && multiplier < 2.0 ? multiplier : 1.0;
-    if (Math.abs(safeMultiplier - this.pllTempoMultiplier) > 0.00005) {
+    if (Math.abs(safeMultiplier - this.pllTempoMultiplier) > 0.0001) {
       this.pllTempoMultiplier = safeMultiplier;
       this.updateLivePlaybackRate();
     }
@@ -550,7 +661,7 @@ export class DjDeck {
 
   public setBaseTempoMultiplier(multiplier: number): void {
     const safeMultiplier = Number.isFinite(multiplier) && multiplier > 0.1 && multiplier < 4.0 ? multiplier : 1.0;
-    if (Math.abs(safeMultiplier - this.baseTempoMultiplier) > 0.00005) {
+    if (Math.abs(safeMultiplier - this.baseTempoMultiplier) > 0.0001) {
       this.baseTempoMultiplier = safeMultiplier;
       this.updateLivePlaybackRate();
     }
@@ -570,7 +681,7 @@ export class DjDeck {
         }
       } else {
         // Only re-anchor and set rate if rate has changed by a perceptible delta
-        if (Math.abs(rate - this.appliedPlaybackRate) < 0.00005) {
+        if (Math.abs(rate - this.appliedPlaybackRate) < 0.0001) {
           return;
         }
         this.appliedPlaybackRate = rate;
@@ -630,6 +741,122 @@ export class DjDeck {
       this.jogPitchNudge = 0;
       this.updateLivePlaybackRate();
     }, 180);
+  }
+
+  /**
+   * Slip Mode (CDJ / Serato professional standard):
+   * When Slip is engaged, touching/scratching/seeking the wave lets the DJ
+   * manipulate the audio position freely, while in the background a silent
+   * virtual slip playhead advances uninterrupted in real-time.
+   * Upon releasing the wave, playback snaps immediately back to that background
+   * playhead without altering the rhythm or losing a beat!
+   */
+  public setSlipMode(enabled: boolean): void {
+    this.isSlipMode = enabled;
+    if (!enabled && this.isSlipping) {
+      this.endSlipTouch();
+    }
+  }
+
+  public toggleSlipMode(): boolean {
+    this.setSlipMode(!this.isSlipMode);
+    return this.isSlipMode;
+  }
+
+  public getIsSlipMode(): boolean {
+    return this.isSlipMode;
+  }
+
+  public getIsSlipping(): boolean {
+    return this.isSlipping;
+  }
+
+  /**
+   * Calculates the exact real-time source sample of the virtual background playhead
+   * which continues advancing at the master tempo clock.
+   */
+  public getSlipSourceSample(): number {
+    if (!this.track || !this.isSlipping || !this.wasPlayingWhenSlipped) {
+      return this.currentSourceSample;
+    }
+    const now = this.audioCtx.currentTime;
+    const elapsedSeconds = Math.max(0, now - this.slipAnchorTime);
+    const elapsedSourceSamples = elapsedSeconds * this.slipEffectiveTempo * this.track.sampleRate;
+    let computedSample = this.slipAnchorSample + (Number.isFinite(elapsedSourceSamples) ? elapsedSourceSamples : 0);
+
+    // Loop wrap or track boundary wrap for continuous seamless background playhead
+    if (this.loop.isActive && this.loop.endSourceSample > this.loop.startSourceSample) {
+      const loopLen = this.loop.endSourceSample - this.loop.startSourceSample;
+      if (computedSample >= this.loop.endSourceSample) {
+        computedSample = this.loop.startSourceSample + ((computedSample - this.loop.startSourceSample) % loopLen);
+      }
+    } else if (this.track.totalSamples > 0) {
+      computedSample = ((computedSample % this.track.totalSamples) + this.track.totalSamples) % this.track.totalSamples;
+    }
+
+    return Math.max(0, Math.min(this.track.totalSamples, computedSample));
+  }
+
+  /**
+   * Called when user touches / clicks down on the waveform or jog platter.
+   * If Slip Mode is active:
+   * - Records current playing position as the slip anchor.
+   * - Keeps virtual background playhead moving forward in real-time.
+   * - Immediately allows the DJ to hear the touched audio position.
+   */
+  public startSlipTouch(touchSample?: number): void {
+    if (!this.track) return;
+    this.updateCurrentPosition();
+
+    if (this.isSlipMode) {
+      this.isSlipping = true;
+      this.wasPlayingWhenSlipped = this.isPlaying;
+      this.slipAnchorTime = this.audioCtx.currentTime;
+      this.slipAnchorSample = this.currentSourceSample;
+      this.slipEffectiveTempo = this.getEffectiveTempoMultiplier();
+    }
+
+    if (touchSample !== undefined) {
+      const clamped = Math.max(0, Math.min(this.track.totalSamples - 100, Math.round(touchSample)));
+      this.seekToSourceSample(clamped, false);
+    }
+  }
+
+  /**
+   * Called continuously as user drags or scrubs across the waveform
+   */
+  public updateSlipTouch(touchSample: number): void {
+    if (!this.track) return;
+    const clamped = Math.max(0, Math.min(this.track.totalSamples - 100, Math.round(touchSample)));
+    this.currentSourceSample = clamped;
+    if (this.isPlaying) {
+      this.seekToSourceSample(clamped, false);
+    }
+  }
+
+  /**
+   * Called when user releases the waveform (mouseUp / touchEnd).
+   * If Slip Mode was active:
+   * - Snaps seamlessly to the virtual background slip position!
+   * - The rhythm, downbeat, and phase alignment are 100% preserved and never altered.
+   */
+  public endSlipTouch(): void {
+    if (!this.track) return;
+
+    if (this.isSlipping) {
+      const snapSample = this.getSlipSourceSample();
+      const resumePlay = this.wasPlayingWhenSlipped;
+      this.isSlipping = false;
+
+      if (resumePlay) {
+        this.seekToSourceSample(snapSample, true);
+        if (!this.isPlaying) {
+          this.play(undefined, snapSample);
+        }
+      } else {
+        this.currentSourceSample = this.slipAnchorSample;
+      }
+    }
   }
 
   /**
@@ -705,6 +932,65 @@ export class DjDeck {
   }
 
   /**
+   * Sets Beat 1 (first downbeat) to the specified sample or current playhead position
+   */
+  public setFirstDownbeat(targetSample?: number): void {
+    if (!this.track) return;
+    const sample = targetSample !== undefined ? targetSample : this.currentSourceSample;
+    const clampedSample = Math.max(0, Math.min(this.track.totalSamples - 100, Math.round(sample)));
+
+    this.track.beatGrid = buildSourceBeatGrid(
+      this.track.sampleRate,
+      this.track.totalSamples,
+      this.track.bpm,
+      clampedSample,
+      this.track.beatGrid?.beatsPerBar || 4
+    );
+  }
+
+  /**
+   * Nudges the BeatGrid by delta milliseconds (+5ms, -5ms, etc.)
+   */
+  public nudgeBeatGrid(deltaMs: number): void {
+    if (!this.track || !this.track.beatGrid) return;
+    const deltaSamples = (deltaMs / 1000) * this.track.sampleRate;
+    const newDownbeat = this.track.beatGrid.firstDownbeatSample + deltaSamples;
+
+    this.track.beatGrid = buildSourceBeatGrid(
+      this.track.sampleRate,
+      this.track.totalSamples,
+      this.track.bpm,
+      newDownbeat,
+      this.track.beatGrid.beatsPerBar || 4
+    );
+  }
+
+  /**
+   * Sets track BPM and recalculates BeatGrid
+   */
+  public setTrackBpm(newBpm: number): void {
+    if (!this.track || newBpm <= 20 || newBpm > 300) return;
+    this.track.bpm = newBpm;
+    const anchor = this.track.beatGrid?.firstDownbeatSample ?? 0;
+    this.track.beatGrid = buildSourceBeatGrid(
+      this.track.sampleRate,
+      this.track.totalSamples,
+      newBpm,
+      anchor,
+      this.track.beatGrid?.beatsPerBar || 4
+    );
+    this.updateLivePlaybackRate();
+  }
+
+  public doubleTrackBpm(): void {
+    if (this.track) this.setTrackBpm(this.track.bpm * 2);
+  }
+
+  public halveTrackBpm(): void {
+    if (this.track) this.setTrackBpm(this.track.bpm / 2);
+  }
+
+  /**
    * Calculates Level VU Meter RMS power
    */
   public updateVuMeter(): [number, number] {
@@ -775,6 +1061,10 @@ export class DjDeck {
       barIndex,
       beatPhase,
       vuLevel: this.currentVuLevels,
+      isSlipMode: this.isSlipMode,
+      isSlipping: this.isSlipping,
+      slipSourceSample: Math.round(this.isSlipping ? this.getSlipSourceSample() : this.currentSourceSample),
+      slipTimeSeconds: this.track ? (this.isSlipping ? this.getSlipSourceSample() : this.currentSourceSample) / this.track.sampleRate : 0,
       isStraightened: !!this.track?.isStraightened,
       warpStatus: warp ? {
         hasWarpMap: true,

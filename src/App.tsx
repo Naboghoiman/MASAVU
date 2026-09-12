@@ -126,8 +126,15 @@ export default function App() {
       switch (e.code) {
         case 'Space':
           e.preventDefault();
-          if (c.deckA.getTelemetry().isPlaying) c.deckA.pause();
-          else c.deckA.play();
+          if (c.deckA.getTelemetry().isPlaying) {
+            c.deckA.pause();
+          } else {
+            if (c.deckA.getTelemetry().isSyncEnabled && c.deckB.getTelemetry().isPlaying) {
+              c.triggerBeatPerfectSlaveStart('beat');
+            } else {
+              c.deckA.play();
+            }
+          }
           break;
         case 'KeyC':
           c.deckA.handleCuePress();
@@ -136,8 +143,15 @@ export default function App() {
           handleSyncToggle('B');
           break;
         case 'Enter':
-          if (c.deckB.getTelemetry().isPlaying) c.deckB.pause();
-          else c.deckB.play();
+          if (c.deckB.getTelemetry().isPlaying) {
+            c.deckB.pause();
+          } else {
+            if (c.deckB.getTelemetry().isSyncEnabled && c.deckA.getTelemetry().isPlaying) {
+              c.triggerBeatPerfectSlaveStart('beat');
+            } else {
+              c.deckB.play();
+            }
+          }
           break;
         case 'Digit1':
           c.deckA.triggerHotCue(1);
@@ -194,24 +208,121 @@ export default function App() {
     const c = controllerRef.current;
     if (!c) return;
 
-    const masterId = c.getMasterDeckId();
-    if (deckId === masterId) {
-      const otherDeck: DeckId = deckId === 'A' ? 'B' : 'A';
-      c.setMasterDeck(otherDeck);
-      c.triggerBeatPerfectSlaveStart('beat');
-      setTrackA(c.deckA.getTrack());
-      setTrackB(c.deckB.getTrack());
-    } else {
-      const slaveDeck = deckId === 'A' ? c.deckA : c.deckB;
-      if (slaveDeck.getTelemetry().isSyncEnabled) {
-        slaveDeck.setSync(false);
-        slaveDeck.setPLLMultiplier(1.0);
-      } else {
-        c.triggerBeatPerfectSlaveStart('beat');
-        setTrackA(c.deckA.getTrack());
-        setTrackB(c.deckB.getTrack());
-      }
+    if (c.audioCtx.state === 'suspended') {
+      c.audioCtx.resume();
     }
+
+    const thisDeck = deckId === 'A' ? c.deckA : c.deckB;
+    const otherDeckId: DeckId = deckId === 'A' ? 'B' : 'A';
+    const otherDeck = deckId === 'A' ? c.deckB : c.deckA;
+
+    const thisTelem = thisDeck.getTelemetry();
+    const otherTelem = otherDeck.getTelemetry();
+
+    // If this deck already has sync enabled, disable it
+    if (thisTelem.isSyncEnabled) {
+      thisDeck.setSync(false);
+      thisDeck.setPLLMultiplier(1.0);
+      return;
+    }
+
+    // Ensure the other deck is designated as Master if not already
+    if (!otherTelem.isMaster) {
+      c.setMasterDeck(otherDeckId);
+    }
+
+    try {
+      // Trigger instant beat-perfect rhythmic phase alignment & tempo lock
+      c.triggerBeatPerfectSlaveStart('beat');
+      const tA = c.deckA.getTrack();
+      const tB = c.deckB.getTrack();
+      if (tA) setTrackA(tA);
+      if (tB) setTrackB(tB);
+    } catch (err) {
+      console.error('Handled sync alignment error gracefully:', err);
+    }
+  };
+
+  const handlePlayA = () => {
+    const c = controllerRef.current;
+    if (!c) return;
+    if (c.audioCtx.state === 'suspended') {
+      c.audioCtx.resume();
+    }
+    const tA = c.deckA.getTelemetry();
+    const tB = c.deckB.getTelemetry();
+    if (tA.isSyncEnabled && tB.isPlaying) {
+      c.triggerBeatPerfectSlaveStart('beat');
+    } else {
+      c.deckA.play();
+    }
+  };
+
+  const handlePlayB = () => {
+    const c = controllerRef.current;
+    if (!c) return;
+    if (c.audioCtx.state === 'suspended') {
+      c.audioCtx.resume();
+    }
+    const tA = c.deckA.getTelemetry();
+    const tB = c.deckB.getTelemetry();
+    if (tB.isSyncEnabled && tA.isPlaying) {
+      c.triggerBeatPerfectSlaveStart('beat');
+    } else {
+      c.deckB.play();
+    }
+  };
+
+  const handleLoadTestPair = () => {
+    const c = controllerRef.current;
+    if (!c || tracks.length < 2) return;
+    const track1 = tracks.find(t => t.id === 'track-high-school-plumber-103') || tracks[0];
+    const track2 = tracks.find(t => t.id === 'track-yatapita-diamond-platnumz-91') || tracks[1];
+
+    c.deckA.loadTrack(track1);
+    c.deckB.loadTrack(track2);
+    setTrackA(c.deckA.getTrack());
+    setTrackB(c.deckB.getTrack());
+  };
+
+  const handleSetFirstDownbeat = (deckId: DeckId) => {
+    const c = controllerRef.current;
+    if (!c) return;
+    c.setFirstDownbeat(deckId);
+    if (deckId === 'A') setTrackA(c.deckA.getTrack());
+    else setTrackB(c.deckB.getTrack());
+  };
+
+  const handleNudgeBeatGrid = (deckId: DeckId, deltaMs: number) => {
+    const c = controllerRef.current;
+    if (!c) return;
+    c.nudgeBeatGrid(deckId, deltaMs);
+    if (deckId === 'A') setTrackA(c.deckA.getTrack());
+    else setTrackB(c.deckB.getTrack());
+  };
+
+  const handleSetTrackBpm = (deckId: DeckId, bpm: number) => {
+    const c = controllerRef.current;
+    if (!c) return;
+    c.setTrackBpm(deckId, bpm);
+    if (deckId === 'A') setTrackA(c.deckA.getTrack());
+    else setTrackB(c.deckB.getTrack());
+  };
+
+  const handleDoubleBpm = (deckId: DeckId) => {
+    const c = controllerRef.current;
+    if (!c) return;
+    c.doubleTrackBpm(deckId);
+    if (deckId === 'A') setTrackA(c.deckA.getTrack());
+    else setTrackB(c.deckB.getTrack());
+  };
+
+  const handleHalveBpm = (deckId: DeckId) => {
+    const c = controllerRef.current;
+    if (!c) return;
+    c.halveTrackBpm(deckId);
+    if (deckId === 'A') setTrackA(c.deckA.getTrack());
+    else setTrackB(c.deckB.getTrack());
   };
 
   const handleQuickAutoSync = async () => {
@@ -228,22 +339,27 @@ export default function App() {
     const tB = c.deckB.getTrack();
     if (!tA || !tB) return;
 
-    if (c.deckA.getTelemetry().isPlaying) {
+    const telemA = c.deckA.getTelemetry();
+    if (telemA.isPlaying) {
       c.triggerBeatPerfectSlaveStart('beat');
-      setTrackA(c.deckA.getTrack());
-      setTrackB(c.deckB.getTrack());
     } else {
-      c.deckA.seekToSourceSample(0, false);
-      c.deckB.seekToSourceSample(0, false);
+      const startA = tA.beatGrid?.firstDownbeatSample ?? 0;
+      const startB = tB.beatGrid?.firstDownbeatSample ?? 0;
+      c.deckA.seekToSourceSample(startA, false);
+      c.deckB.seekToSourceSample(startB, false);
       const baseTempo = tA.bpm / tB.bpm;
       c.deckB.setBaseTempoMultiplier(baseTempo);
       c.deckB.setPLLMultiplier(1.0);
       c.deckB.setSync(true);
       c.deckA.setSync(false);
-      const startTime = c.audioCtx.currentTime + 0.08;
-      c.deckA.play(startTime, 0);
-      c.deckB.play(startTime, 0);
+      const pitchPct = (baseTempo - 1.0) / c.deckB.getPitchRange();
+      c.deckB.setPitchPercentage(Math.max(-1.0, Math.min(1.0, pitchPct)));
+      const startTime = c.audioCtx.currentTime + 0.05;
+      c.deckA.play(startTime, startA);
+      c.deckB.play(startTime, startB);
     }
+    setTrackA(c.deckA.getTrack());
+    setTrackB(c.deckB.getTrack());
   };
 
   // Fallback default telemetry while loading
@@ -258,6 +374,10 @@ export default function App() {
     isPlaying: false,
     isMaster: true,
     isSyncEnabled: false,
+    isSlipMode: false,
+    isSlipping: false,
+    slipSourceSample: 0,
+    slipTimeSeconds: 0,
     currentSourceSample: 0,
     currentOutputFrame: 0,
     currentTimeSeconds: 206,
@@ -279,6 +399,10 @@ export default function App() {
     isPlaying: false,
     isMaster: false,
     isSyncEnabled: false,
+    isSlipMode: false,
+    isSlipping: false,
+    slipSourceSample: 0,
+    slipTimeSeconds: 0,
     currentSourceSample: 0,
     currentOutputFrame: 0,
     currentTimeSeconds: 108,
@@ -424,10 +548,10 @@ export default function App() {
               phaseLockState={phaseLockState}
               onSeekDeckA={(s) => controllerRef.current?.deckA.seekToSourceSample(s)}
               onSeekDeckB={(s) => controllerRef.current?.deckB.seekToSourceSample(s)}
-              onPlayDeckA={() => controllerRef.current?.deckA.play()}
+              onPlayDeckA={handlePlayA}
               onPauseDeckA={() => controllerRef.current?.deckA.pause()}
               onCueDeckA={() => controllerRef.current?.deckA.handleCuePress()}
-              onPlayDeckB={() => controllerRef.current?.deckB.play()}
+              onPlayDeckB={handlePlayB}
               onPauseDeckB={() => controllerRef.current?.deckB.pause()}
               onCueDeckB={() => controllerRef.current?.deckB.handleCuePress()}
               onToggleLooper={(deck) => {
@@ -448,6 +572,19 @@ export default function App() {
                 if (deck === 'A') c?.deckA.triggerHotCue(1);
                 else c?.deckB.triggerHotCue(1);
               }}
+              onSetFirstDownbeatA={() => handleSetFirstDownbeat('A')}
+              onNudgeBeatGridA={(ms) => handleNudgeBeatGrid('A', ms)}
+              onSetFirstDownbeatB={() => handleSetFirstDownbeat('B')}
+              onNudgeBeatGridB={(ms) => handleNudgeBeatGrid('B', ms)}
+              onLoadTestPair={handleLoadTestPair}
+              onToggleSlipDeckA={() => controllerRef.current?.deckA.toggleSlipMode()}
+              onToggleSlipDeckB={() => controllerRef.current?.deckB.toggleSlipMode()}
+              onSlipTouchStartA={(sample) => controllerRef.current?.deckA.startSlipTouch(sample)}
+              onSlipTouchMoveA={(sample) => controllerRef.current?.deckA.updateSlipTouch(sample)}
+              onSlipTouchEndA={() => controllerRef.current?.deckA.endSlipTouch()}
+              onSlipTouchStartB={(sample) => controllerRef.current?.deckB.startSlipTouch(sample)}
+              onSlipTouchMoveB={(sample) => controllerRef.current?.deckB.updateSlipTouch(sample)}
+              onSlipTouchEndB={() => controllerRef.current?.deckB.endSlipTouch()}
             />
           </div>
 
@@ -524,7 +661,9 @@ export default function App() {
                 setLooperTelemetry(c.getLooperTelemetry());
               }
             }}
-            onUploadCustomLoop={handleUploadLoopFile}
+            onUploadCustomLoop={(slotIndex, file, forcedBars) => {
+              handleUploadLoopFile(file, slotIndex, forcedBars);
+            }}
             onSetSlotBars={handleSetSlotBars}
             onCaptureFromDeck={handleCaptureFromDeck}
             onAddCustomLoopSlot={handleAddCustomLoopSlot}
@@ -567,7 +706,9 @@ export default function App() {
               controllerRef.current?.sampler.setGlobalQuantize(q);
               setSamplerTelemetry(controllerRef.current?.getSamplerTelemetry() || null);
             }}
-            onUploadCustomSample={handleUploadSampleFile}
+            onUploadCustomSample={(padIndex, file) => {
+              handleUploadSampleFile(file, padIndex);
+            }}
           />
         </div>
 
@@ -578,16 +719,18 @@ export default function App() {
           telemetryA={telemA}
           telemetryB={telemB}
           // Transports
-          onPlayA={() => controllerRef.current?.deckA.play()}
+          onPlayA={handlePlayA}
           onPauseA={() => controllerRef.current?.deckA.pause()}
           onCueDownA={() => controllerRef.current?.deckA.handleCuePress()}
           onCueUpA={() => controllerRef.current?.deckA.handleCueRelease()}
           onSyncA={() => handleSyncToggle('A')}
-          onPlayB={() => controllerRef.current?.deckB.play()}
+          onToggleSlipA={() => controllerRef.current?.deckA.toggleSlipMode()}
+          onPlayB={handlePlayB}
           onPauseB={() => controllerRef.current?.deckB.pause()}
           onCueDownB={() => controllerRef.current?.deckB.handleCuePress()}
           onCueUpB={() => controllerRef.current?.deckB.handleCueRelease()}
           onSyncB={() => handleSyncToggle('B')}
+          onToggleSlipB={() => controllerRef.current?.deckB.toggleSlipMode()}
           // Deck A EQs & Volume
           lowEqA={lowEqA}
           midEqA={midEqA}
@@ -657,7 +800,19 @@ export default function App() {
           onTriggerHotCueB={(id) => controllerRef.current?.deckB.triggerHotCue(id)}
           onSetLoopA={(beats) => controllerRef.current?.deckA.setLoop(beats)}
           onSetLoopB={(beats) => controllerRef.current?.deckB.setLoop(beats)}
-          onPlaySampler={(fx) => controllerRef.current?.playSamplerFx(fx)}
+          onPlaySampler={(fx) => {
+            const c = controllerRef.current;
+            if (!c) return;
+            if (fx === 'airhorn' || fx === 'siren' || fx === 'laser' || fx === 'drop') {
+              c.playSamplerFx(fx);
+            } else {
+              const padMap: Record<string, number> = { kick: 0, snare: 1, hihat: 2, vocal: 3 };
+              const padIdx = padMap[fx] ?? 0;
+              const masterDeck = c.deckA.getTelemetry().isMaster ? c.deckA : c.deckB;
+              c.sampler.triggerPad(padIdx, 1.0, masterDeck.getTelemetry(), masterDeck.getTrack());
+              setSamplerTelemetry(c.getSamplerTelemetry());
+            }
+          }}
         />
       </div>
 
