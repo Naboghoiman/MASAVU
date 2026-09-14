@@ -388,6 +388,19 @@ jobs:
           B64
           base64 -d /tmp/djiman-source.b64 > /tmp/djiman-source.zip
           unzip -q /tmp/djiman-source.zip -d "$GITHUB_WORKSPACE"
+          # Harness-only compile fix: DEBUG_ASSERT is declared in Mixxx util/assert.h.
+          python3 - <<'PYFIX'
+          from pathlib import Path
+          p = Path('android_mixxx_sync_test/src/main.cpp')
+          text = p.read_text()
+          include = '#include "util/assert.h"\n'
+          marker = '#include "engine/sync/enginesync.h"'
+          if include not in text:
+              if marker not in text:
+                  raise SystemExit('enginesync.h include not found')
+              text = text.replace(marker, include + marker, 1)
+              p.write_text(text)
+          PYFIX
           test -f android_mixxx_sync_test/CMakeLists.txt
           test -f android_mixxx_sync_test/src/DeckSyncable.cpp
           echo "Android harness restored."
