@@ -1,0 +1,114 @@
+name: Exact Mixxx Sync Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/mixxx-exact-sync-test.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  exact-mixxx-sync-test:
+    name: Original Mixxx synchronization tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      MIXXX_COMMIT: 3e5f59002cdd02040f3b7aeef938ea9af2def001
+      QT_QPA_PLATFORM: offscreen
+      DEBIAN_FRONTEND: noninteractive
+
+    steps:
+      - name: Checkout MASAVU workflow
+        uses: actions/checkout@v4
+
+      - name: Clone exact Mixxx commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/mixxxdj/mixxx.git mixxx
+          git -C mixxx checkout --detach "$MIXXX_COMMIT"
+          test "$(git -C mixxx rev-parse HEAD)" = "$MIXXX_COMMIT"
+          echo "Verified Mixxx commit: $(git -C mixxx rev-parse HEAD)"
+
+      - name: Verify original synchronization file blob hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd mixxx
+          check_blob() {
+            expected="$1"
+            file="$2"
+            actual="$(git hash-object "$file")"
+            echo "$file  $actual"
+            test "$actual" = "$expected"
+          }
+          check_blob 06e1371b2b9ae0ea2ef52a62a440c03301cbaed3 src/engine/sync/clock.h
+          check_blob 19e37c132fb9f2d4ba5ecf31c12621a4a675dca6 src/engine/sync/enginesync.cpp
+          check_blob cf8bcaf913bf145eb7fb8310524029e37b3f6aed src/engine/sync/enginesync.h
+          check_blob 8cf819d5e2d28b0eca1cc4f2d3156ffdd466f7ee src/engine/sync/internalclock.cpp
+          check_blob 7cf1c4bdd9d4d94b56dc502191f96de58d74b225 src/engine/sync/internalclock.h
+          check_blob ea3bd1906c22162930659d950f8d4444e0aa509e src/engine/sync/syncable.h
+          check_blob 67949fda9aa65dc14e2cd6ada4e788238fa67023 src/engine/sync/synccontrol.cpp
+          check_blob f741bef845a526023f60279b061f9ae63f50cb60 src/engine/sync/synccontrol.h
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "All synchronization files are exact upstream blobs."
+
+      - name: Install Mixxx build dependencies using Mixxx's own script
+        shell: bash
+        working-directory: mixxx
+        run: |
+          set -euo pipefail
+          chmod +x tools/debian_buildenv.sh
+          tools/debian_buildenv.sh setup
+
+      - name: Configure original Mixxx test build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S mixxx -B build \
+            -DBUILD_TESTING=ON \
+            -DBUILD_BENCH=OFF \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build original mixxx-test executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build --target mixxx-test --parallel 2
+
+      - name: Run only Mixxx synchronization tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          TEST_BIN="$(find build -type f -name 'mixxx-test' -perm -111 | head -n 1)"
+          test -n "$TEST_BIN"
+          echo "Using: $TEST_BIN"
+          set +e
+          "$TEST_BIN" --gtest_filter='EngineSyncTest.*:SyncControlTest.TestDetermineBpmMultiplier' 2>&1 | tee mixxx-sync-test.log
+          code=${PIPESTATUS[0]}
+          set -e
+          exit "$code"
+
+      - name: Confirm Mixxx source stayed unchanged
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C mixxx rev-parse HEAD)" = "$MIXXX_COMMIT"
+          if [ -n "$(git -C mixxx status --porcelain --untracked-files=no)" ]; then
+            echo "ERROR: tracked Mixxx source changed"
+            git -C mixxx status --short
+            exit 1
+          fi
+          echo "PASS: tracked Mixxx source remained unchanged."
+
+      - name: Upload synchronization test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mixxx-exact-sync-test-log
+          path: mixxx-sync-test.log
+          if-no-files-found: warn
